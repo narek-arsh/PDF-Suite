@@ -462,8 +462,15 @@ def _wrench(p, s):
     p.restore()
 
 
+def _copy(p, s):
+    """Dos hojas superpuestas."""
+    _stroke(p, s, 0.09)
+    p.drawRoundedRect(QRectF(s * 0.30, s * 0.10, s * 0.58, s * 0.62), s * 0.07, s * 0.07)
+    p.drawRoundedRect(QRectF(s * 0.12, s * 0.30, s * 0.58, s * 0.62), s * 0.07, s * 0.07)
+
+
 _DRAWERS = {
-    "wrench": _wrench, "stamp": _stamp, "note": _note, "form": _form, "signature": _signature, "image": _image, "pen": _pen, "shapes": _shapes, "highlight": _highlight, "underline": _underline, "strike": _strike, "eraser": _eraser,
+    "copy": _copy, "wrench": _wrench, "stamp": _stamp, "note": _note, "form": _form, "signature": _signature, "image": _image, "pen": _pen, "shapes": _shapes, "highlight": _highlight, "underline": _underline, "strike": _strike, "eraser": _eraser,
     "link": _link, "grid": _grid, "printer": _printer, "droplet": _droplet,
     "pencil": _pencil, "info": _info, "scissors": _scissors, "download": _download,
     "save": _save, "folder": _folder, "archive": _archive, "lock": _lock,
