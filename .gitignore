@@ -1,0 +1,13 @@
+# Generado
+__pycache__/
+*.pyc
+build/
+dist/
+app_log*.txt
+
+# Fuente propietaria (Adobe Myriad Pro): no se publica
+Font/
+
+# Salidas y copias de trabajo
+*_editado.pdf
+*.bak*
