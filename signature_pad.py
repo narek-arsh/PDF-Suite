@@ -5,6 +5,7 @@ de una imagen), guardarla para reutilizarla y devolverla como PNG con fondo tran
 
 Las firmas guardadas viven en %APPDATA%\\PDFManager\\signatures. Nada sale del ordenador.
 """
+import json
 import os
 import tempfile
 import time
@@ -32,22 +33,75 @@ def list_saved() -> list[Path]:
     return sorted(d.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) if d.is_dir() else []
 
 
-def save_png(img: QImage, keep: bool = True) -> Path:
-    """Guarda la firma; si `keep` es False va a la carpeta temporal (solo para este documento)."""
+def _meta_path(png: Path) -> Path:
+    return Path(png).with_suffix(".json")
+
+
+def load_meta(png: Path) -> dict:
+    """Nombre y datos de edición de una firma guardada ({} si no hay)."""
+    try:
+        return json.loads(_meta_path(png).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def display_name(png: Path) -> str:
+    n = load_meta(png).get("name")
+    if n:
+        return n
+    stem = Path(png).stem.replace("firma_", "")
+    try:
+        return "Firma " + time.strftime("%d/%m/%Y %H:%M", time.strptime(stem, "%Y%m%d_%H%M%S"))
+    except ValueError:
+        return "Firma"
+
+
+def save_png(img: QImage, keep: bool = True, name: str = "", meta: dict | None = None,
+             replace: Path | None = None) -> Path:
+    """Guarda la firma; si `keep` es False va a la carpeta temporal (solo para este documento).
+    `meta` guarda cómo se hizo (para poder editarla luego) y `replace` sobrescribe una firma ya guardada."""
     stamp = time.strftime("%Y%m%d_%H%M%S")
-    if keep:
+    if replace is not None:
+        path = Path(replace)
+    elif keep:
         d = signatures_dir()
         d.mkdir(parents=True, exist_ok=True)
         path = d / f"firma_{stamp}.png"
     else:
         path = Path(tempfile.gettempdir()) / f"pdfmanager_firma_{stamp}.png"
     img.save(str(path), "PNG")
+    if keep or replace is not None:
+        data = dict(meta or {})
+        data["name"] = name.strip() or load_meta(path).get("name") or ""
+        try:
+            _meta_path(path).write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            pass
     return path
+
+
+def rename(png: Path, name: str) -> bool:
+    data = load_meta(png)
+    data["name"] = name.strip()
+    try:
+        _meta_path(png).write_text(json.dumps(data), encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def strokes_meta(strokes: list, color: str, width: float) -> dict:
+    return {"type": "draw", "color": color, "width": width,
+            "strokes": [[[q.x(), q.y()] for q in s] for s in strokes]}
 
 
 def delete_saved(path: Path) -> bool:
     try:
         path.unlink()
+        try:
+            _meta_path(path).unlink()
+        except OSError:
+            pass
         return True
     except OSError:
         return False
@@ -223,16 +277,17 @@ class _ColorRow(QWidget):
 
 class SignatureDialog(QDialog):
     """Crear una firma: dibujarla, escribirla o usar una imagen. `result_path` = PNG resultante."""
-    def __init__(self, parent=None, default_name: str = ""):
+    def __init__(self, parent=None, default_name: str = "", edit_path: Path | None = None):
         super().__init__(parent)
-        self.setWindowTitle("Crear firma")
+        self.edit_path = Path(edit_path) if edit_path else None
+        self.setWindowTitle("Editar firma" if edit_path else "Crear firma")
         self.resize(640, 560)
         self.result_path: Path | None = None
         self._image: QImage | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        title = QLabel("Crear firma")
+        title = QLabel("Editar firma" if edit_path else "Crear firma")
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
         self.tabs = QTabWidget()
@@ -295,9 +350,14 @@ class SignatureDialog(QDialog):
         l3.addWidget(self.preview, 1)
         self.tabs.addTab(t3, "Imagen")
 
+        self.sig_name = QLineEdit()
+        self.sig_name.setPlaceholderText("Nombre de la firma (p. ej. «Firma corta», «Rúbrica empresa»)")
+        lay.addWidget(self.sig_name)
         self.keep = QCheckBox("Guardar esta firma para usarla en otros documentos")
         self.keep.setChecked(True)
         lay.addWidget(self.keep)
+        if self.edit_path is not None:
+            self._load_for_edit()
         self.note = QLabel("")
         self.note.setObjectName("Hint")
         lay.addWidget(self.note)
@@ -308,6 +368,27 @@ class SignatureDialog(QDialog):
         btns.addWidget(cancel)
         btns.addWidget(ok)
         lay.addLayout(btns)
+
+    def _load_for_edit(self):
+        meta = load_meta(self.edit_path)
+        self.sig_name.setText(meta.get("name", ""))
+        self.keep.setChecked(True)
+        self.keep.setEnabled(False)
+        if meta.get("type") == "draw":
+            self.pad.strokes = [[QPointF(x, y) for x, y in s] for s in meta.get("strokes", [])]
+            self.pad.color = meta.get("color", self.pad.color)
+            self.pad.pen_width = float(meta.get("width", self.pad.pen_width))
+            self.width_slider.setValue(int(self.pad.pen_width * 10))
+            self.tabs.setCurrentIndex(0)
+        elif meta.get("type") == "text":
+            self.name_edit.setText(meta.get("text", ""))
+            self.type_color = meta.get("color", self.type_color)
+            fam = meta.get("font")
+            for i in range(self.font_list.count()):
+                if self.font_list.item(i).data(Qt.UserRole) == fam:
+                    self.font_list.setCurrentRow(i)
+            self._refresh_fonts()
+            self.tabs.setCurrentIndex(1)
 
     def _set_pad_color(self, hexc):
         self.pad.color = hexc
@@ -366,5 +447,14 @@ class SignatureDialog(QDialog):
             self.note.setText({0: "Dibuja tu firma en el recuadro.", 1: "Escribe tu nombre.",
                                2: "Elige una imagen."}[self.tabs.currentIndex()])
             return
-        self.result_path = save_png(img, keep=self.keep.isChecked())
+        tab = self.tabs.currentIndex()
+        meta = {}
+        if tab == 0:
+            meta = strokes_meta(self.pad.strokes, self.pad.color, self.pad.pen_width)
+        elif tab == 1:
+            it = self.font_list.currentItem()
+            meta = {"type": "text", "text": self.name_edit.text(), "font": it.data(Qt.UserRole) if it else "Segoe UI",
+                    "color": self.type_color}
+        self.result_path = save_png(img, keep=self.keep.isChecked(), name=self.sig_name.text(), meta=meta,
+                                    replace=self.edit_path)
         self.accept()

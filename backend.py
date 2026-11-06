@@ -258,7 +258,7 @@ def find_replace_in_pdf(path: str, buscar: str, reemplazar: str) -> str | None:
         return None
 
 
-# ── EDITOR VISUAL (clic sobre el texto, estilo Sejda) ───────────────────
+# ── EDITOR VISUAL (clic sobre el texto para editarlo) ───────────────────
 def open_edit_session(path: str):
     """Abre el PDF para una sesión de edición en memoria (varios cambios
     sin tocar disco hasta que se guarde). Devuelve el fitz.Document o None."""
@@ -345,6 +345,64 @@ def replace_span_in_doc(doc, page_idx: int, bbox: tuple, new_text: str,
         return True, bool(matched_file), found_family
     except Exception:
         return False, bool(matched_file), found_family
+
+
+def recolor_text_in_boxes(doc, page_idx: int, boxes: list, rgb) -> int:
+    """Cambia el color del texto que queda dentro de las cajas (p. ej. a azul de hipervínculo) conservando la fuente, el
+    tamaño y la posición. Solo cambia lo que está dentro: un tramo a medias de una línea se parte en lo que se
+    recolorea y lo que no. Devuelve cuántos tramos cambió."""
+    try:
+        pg = doc[page_idx]
+        data = pg.get_text("rawdict")
+    except Exception:
+        return 0
+    zones = [fitz.Rect(b) for b in boxes]
+    runs = []
+    for block in data.get("blocks", []):
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                cur = []
+                for ch in span.get("chars", []):
+                    cb = fitz.Rect(ch["bbox"])
+                    centre = fitz.Point((cb.x0 + cb.x1) / 2, (cb.y0 + cb.y1) / 2)
+                    if any(z.contains(centre) for z in zones):
+                        cur.append(ch)
+                    elif cur:
+                        runs.append((span, cur))
+                        cur = []
+                if cur:
+                    runs.append((span, cur))
+    clean = []
+    for span, chars in runs:                      # sin espacios sueltos al principio o al final de un tramo
+        while chars and not chars[0]["c"].strip():
+            chars = chars[1:]
+        while chars and not chars[-1]["c"].strip():
+            chars = chars[:-1]
+        if chars:
+            clean.append((span, chars))
+    if not clean:
+        return 0
+    for span, chars in clean:
+        r = fitz.Rect(chars[0]["bbox"])
+        for ch in chars[1:]:
+            r |= fitz.Rect(ch["bbox"])
+        pg.add_redact_annot(r, fill=False)
+    pg.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                        text=fitz.PDF_REDACT_TEXT_REMOVE)
+    color = tuple(float(c) for c in rgb)
+    for span, chars in clean:
+        text = "".join(ch["c"] for ch in chars)
+        font = span.get("font", "")
+        flags = span.get("flags", 0)
+        bold, italic = winfonts.style_from_ps_name(font)
+        bold, italic = bold or bool(flags & 16), italic or bool(flags & 2)
+        matched, family = winfonts.find_font_file(font) if font else (None, "")
+        if matched and (bold or italic):
+            matched = winfonts.find_styled_font(family, bold, italic) or matched
+        base14 = {(False, False): "helv", (True, False): "hebo", (False, True): "heit", (True, True): "hebi"}[(bold, italic)]
+        _insert_text_with_fallback(pg, fitz.Point(chars[0]["origin"]), text, float(span.get("size", 10.0)), matched,
+                                   color, base14)
+    return len(clean)
 
 
 # ── Edición por párrafos con reflujo ──────────────────────────────────────
@@ -808,7 +866,7 @@ def _hf(geo: dict, rect) -> tuple:
 
 
 DEFAULT_HF = {"header_boxes": [], "footer_boxes": [], "repeat_header": True,
-              "repeat_footer": True, "parity": False, "numbering": True}
+              "repeat_footer": True, "parity": False, "numbering": True, "background": True}
 
 
 def _geo_with_settings(geo: dict, settings) -> dict:
@@ -1172,6 +1230,115 @@ def _layout_runs(runs: list[dict], width_of, first_w: float, cont_w: float) -> l
     return [ln for ln in lines if ln["els"] or ln["hard"]]
 
 
+def render_text_free_clip(doc, page_idx: int, rect: tuple, zoom: float) -> bytes | None:
+    """PNG de una zona de la página SIN su texto (con el fondo, dibujos e imágenes intactos). Sirve para tapar el texto
+    original mientras se edita, sin pintar un recuadro: el editor se ve directamente sobre el fondo real de la página."""
+    try:
+        tmp = fitz.open()
+        tmp.insert_pdf(doc, from_page=page_idx, to_page=page_idx)
+        pg = tmp[0]
+        r = fitz.Rect(rect) & pg.rect
+        if r.is_empty:
+            tmp.close()
+            return None
+        pg.add_redact_annot(r, fill=False)
+        pg.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=fitz.PDF_REDACT_LINE_ART_NONE,
+                            text=fitz.PDF_REDACT_TEXT_REMOVE)
+        png = pg.get_pixmap(matrix=fitz.Matrix(zoom, zoom), clip=r).tobytes("png")
+        tmp.close()
+        return png
+    except Exception:
+        return None
+
+
+def _replace_in_runs(runs: list, pattern, repl: str) -> tuple:
+    """Sustituye en los tramos de estilo: el texto nuevo lleva el estilo del primer carácter reemplazado, y lo que no
+    se toca conserva el suyo. Devuelve (tramos nuevos, nº de sustituciones)."""
+    full = "".join(r["text"] for r in runs)
+    matches = [m for m in pattern.finditer(full) if m.end() > m.start()]
+    if not matches:
+        return runs, 0
+    bounds, pos = [], 0
+    for r in runs:
+        bounds.append((pos, pos + len(r["text"])))
+        pos += len(r["text"])
+    out: list = []
+
+    def emit(i: int, text: str):
+        if text:
+            if out and all(out[-1][k] == runs[i][k] for k in runs[i] if k != "text"):
+                out[-1]["text"] += text
+            else:
+                out.append({**runs[i], "text": text})
+
+    mi, cursor = 0, 0
+    while cursor < len(full):
+        if mi < len(matches) and cursor == matches[mi].start():
+            m = matches[mi]
+            style_i = next((i for i, (a, b2) in enumerate(bounds) if a <= m.start() < b2), len(runs) - 1)
+            emit(style_i, repl)
+            cursor = m.end()
+            mi += 1
+            continue
+        stop = matches[mi].start() if mi < len(matches) else len(full)
+        i = next(i for i, (a, b2) in enumerate(bounds) if a <= cursor < b2)
+        end = min(stop, bounds[i][1])
+        emit(i, full[cursor:end])
+        cursor = end
+    return out, len(matches)
+
+
+def replace_text_in_doc(doc, search: str, replacement: str, settings=None, manual: bool = False,
+                        case: bool = False, before=None, ask_pages=None) -> dict:
+    """Busca y reemplaza en todo el documento conservando fuente, tamaño y color de cada tramo, y recolocando el
+    párrafo (justificación, líneas que cambian, cabecera y pie) como cualquier edición. `before()` se llama una vez, justo
+    antes del primer cambio (para poder deshacer). `ask_pages(page, para, runs)` puede devolver False para cancelar si
+    el cambio añadiría páginas. Devuelve {"count", "pages", "cancelled"}."""
+    import re as _re
+    res = {"count": 0, "pages": set(), "cancelled": False}
+    if not search:
+        return res
+    pattern = _re.compile(_re.escape(search), 0 if case else _re.IGNORECASE)
+    done = set()
+    called = False
+    p = 0
+    while p < len(doc):
+        for _ in range(400):
+            target = None
+            for para in get_page_paragraphs(doc, p, manual=manual):
+                key = (p, para["text"])
+                if key in done or not pattern.search(para["text"]):
+                    continue
+                target = para
+                break
+            if target is None:
+                break
+            runs = target.get("runs") or [{"text": target["text"], "font": target["font"], "family": None,
+                                           "bold": False, "italic": False, "size": target["size"],
+                                           "color": target["color"]}]
+            new_runs, n = _replace_in_runs([dict(r) for r in runs], pattern, replacement)
+            if n == 0:
+                done.add((p, target["text"]))
+                continue
+            new_text = "".join(r["text"] for r in new_runs)
+            if ask_pages is not None and ask_pages(p, target, new_runs) is False:
+                res["cancelled"] = True
+                return res
+            if before is not None and not called:
+                before()
+                called = True
+            r = replace_paragraph_in_doc(doc, p, target, new_text, target["size"], target["color"], settings=settings,
+                                         runs=new_runs, shift=not manual)
+            done.add((p, new_text))
+            if r.get("ok"):
+                res["count"] += n
+                res["pages"].update(r.get("pages") or [p])
+            else:
+                done.add((p, target["text"]))
+        p += 1
+    return res
+
+
 def replace_paragraph_in_doc(doc, page_idx: int, para: dict, new_text: str, size: float,
                              color, family=None, bold=None, italic=None, settings=None,
                              runs=None, shift: bool = True, insert_gap: float = 0.0) -> dict:
@@ -1515,6 +1682,87 @@ def add_text_box(doc, page_idx: int, x: float, y_top: float, runs: list, setting
     return res
 
 
+BLANK_HF = {"header_boxes": [], "footer_boxes": [], "repeat_header": False, "repeat_footer": False,
+            "numbering": False, "background": False}
+
+
+def page_background(doc, idx: int) -> dict | None:
+    """Fondo de página completa que se repite en el documento: {"images": [xref…], "fill": (r, g, b) o None}.
+    Cuenta como fondo una imagen que cubre casi toda la página y es LA MISMA en otra página (si cada página tiene su
+    propia imagen es un escaneo, no un fondo), o un rectángulo de color que llena la página. None si no hay."""
+    try:
+        page = doc[idx]
+        r = page.rect
+        area = max(r.width * r.height, 1.0)
+        others = [i for i in range(len(doc)) if i != idx][:8]
+        images = []
+        for info in page.get_image_info(xrefs=True):
+            x = info.get("xref") or 0
+            b = fitz.Rect(info["bbox"]) & r
+            if x and b.width * b.height >= 0.8 * area:
+                if any(x in {im[0] for im in doc[o].get_images()} for o in others):
+                    images.append(x)
+        fill = None
+        for d in page.get_drawings():
+            rc = fitz.Rect(d["rect"]) & r
+            if d.get("fill") and rc.width * rc.height >= 0.95 * area and not d.get("color"):
+                if any(any(fitz.Rect(e["rect"]).get_area() >= 0.95 * area and e.get("fill") == d["fill"]
+                           for e in doc[o].get_drawings()) for o in others[:3]):
+                    fill = tuple(d["fill"])
+                break
+        if images or fill:
+            return {"images": images, "fill": fill}
+    except Exception:
+        pass
+    return None
+
+
+def has_header_footer(doc, at: int, settings=None) -> bool:
+    """¿Hay cabecera o pie que copiar a una página nueva en la posición `at`? (detectados o marcados por el usuario)"""
+    try:
+        if settings is not None:
+            return bool(settings.get("header_boxes") or settings.get("footer_boxes"))
+        ref = max(0, min(at - 1 if at > 0 else 0, doc.page_count - 1))
+        h, f = auto_header_footer(doc, ref)
+        return bool(h or f or page_background(doc, ref))
+    except Exception:
+        return False
+
+
+def preview_inserted_page(doc, at: int, settings=None, width: int = 260) -> bytes | None:
+    """PNG de cómo quedaría la página nueva en la posición `at` con esos ajustes (se prueba en una copia)."""
+    try:
+        tmp = fitz.open(stream=doc.tobytes(), filetype="pdf")
+        res = insert_page(tmp, at, settings=settings)
+        if not res.get("ok"):
+            tmp.close()
+            return None
+        pg = tmp[min(at, tmp.page_count - 1)]
+        z = width / max(pg.rect.width, 1.0)
+        png = pg.get_pixmap(matrix=fitz.Matrix(z, z)).tobytes("png")
+        tmp.close()
+        return png
+    except Exception:
+        return None
+
+
+def insert_pdf_pages(doc, at: int, path: str) -> dict:
+    """Inserta todas las páginas de otro PDF en la posición `at`."""
+    res = {"ok": False, "count": 0}
+    try:
+        src = fitz.open(path)
+        if src.needs_pass:
+            src.close()
+            return res
+        n = src.page_count
+        doc.insert_pdf(src, start_at=max(0, min(at, doc.page_count)))
+        src.close()
+        res.update(ok=True, count=n)
+    except Exception:
+        pass
+    return res
+
+
 def insert_page(doc, at: int, settings=None) -> dict:
     """Añade una página en la posición `at` (0 = al principio, page_count = al final), del
     tamaño de la vecina. Copia la cabecera y el pie según los ajustes (iguales, o de la de
@@ -1530,6 +1778,14 @@ def insert_page(doc, at: int, settings=None) -> dict:
         ref = fitz.Rect(doc[ref_idx].rect)
         touched = {at}
         doc.new_page(at if at < n else -1, width=ref.width, height=ref.height)
+        if s.get("background", True):                              # el fondo de página completa también se repite
+            bg = page_background(doc, ref_idx if ref_idx != at else min(at + 1, doc.page_count - 1))
+            if bg:
+                newp = doc[at]
+                if bg["fill"]:
+                    newp.draw_rect(newp.rect, color=None, fill=bg["fill"], overlay=False)
+                for x in bg["images"]:
+                    newp.insert_image(newp.rect, xref=x, overlay=False)
         if at > 0:
             src_idx = at - 2 if s["parity"] and at - 2 >= 0 and _size_key(doc[at - 2].rect) == _size_key(ref) \
                 else at - 1

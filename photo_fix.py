@@ -265,32 +265,163 @@ def render_page(doc, page_idx: int, max_dpi: int = 300, max_px: int = 4200) -> I
     return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
 
+def _paper_fill(img: Image.Image) -> tuple:
+    arr = np.asarray(img.convert("RGB")).reshape(-1, 3)
+    return tuple(int(v) for v in np.percentile(arr, 85, axis=0))
+
+
+def _line_slopes(gray: Image.Image, nwin: int = 7) -> list:
+    """[(y centro, grados, confianza)] de la inclinación de las líneas de texto en franjas horizontales de la página."""
+    h = gray.height
+    wh = max(40, int(h * 0.27))
+    out = []
+    for k in range(nwin):
+        c = h * (0.1 + 0.8 * k / (nwin - 1))
+        y0, y1 = int(max(0, c - wh / 2)), int(min(h, c + wh / 2))
+        if y1 - y0 < 30:
+            continue
+        ang, conf = pt._deskew_scan(gray.crop((0, y0, gray.width, y1)), 12.0)
+        out.append(((y0 + y1) / 2.0, ang, conf))
+    return out
+
+
+def keystone_straighten(img: Image.Image, slope_of_y, bands: int = 48) -> Image.Image:
+    """Endereza un texto cuya inclinación cambia de arriba a abajo (foto hecha con el móvil en ángulo): cada franja
+    horizontal se corrige con su propia inclinación, de forma continua, y las líneas quedan todas horizontales."""
+    w, h = img.size
+    xc = w / 2.0
+    mesh = []
+    for i in range(bands):
+        y0, y1 = int(round(h * i / bands)), int(round(h * (i + 1) / bands))
+        if y1 <= y0:
+            continue
+        t0 = math.tan(math.radians(slope_of_y(y0)))
+        t1 = math.tan(math.radians(slope_of_y(y1)))
+        quad = (0, y0 + t0 * (0 - xc), 0, y1 + t1 * (0 - xc), w, y1 + t1 * (w - xc), w, y0 + t0 * (w - xc))
+        mesh.append(((0, y0, w, y1), quad))
+    return img.transform((w, h), Image.MESH, mesh, Image.BICUBIC, fillcolor=_paper_fill(img))
+
+
+def straighten_text(img: Image.Image) -> tuple:
+    """Deja horizontales las líneas de texto, tomando como guía la base de las letras. Mide la inclinación en varias
+    franjas: si es la misma en toda la página, la gira; si cambia de arriba a abajo (foto con perspectiva), corrige cada
+    franja con la suya. Devuelve (imagen, grados de la mayor corrección); si ya está recto, la imagen igual y 0."""
+    gray = img.convert("L")
+    pts = [(y, a, c) for y, a, c in _line_slopes(gray) if c >= 1.8]       # franjas con líneas de texto claras
+    if len(pts) < 2:                                                      # poco texto: una sola medida en toda la página
+        ang, conf = pt._deskew_scan(gray, 12.0)
+        if abs(ang) < 0.25 or conf < 1.3:
+            return img, 0.0
+        return img.rotate(ang, resample=Image.BICUBIC, expand=False, fillcolor=_paper_fill(img)), float(ang)
+    ys = np.array([p[0] for p in pts]); an = np.array([p[1] for p in pts]); wt = np.array([p[2] for p in pts])
+    slope, icpt = np.polyfit(ys, an, 1, w=wt)                              # inclinación ≈ icpt + slope·y
+    fit = icpt + slope * ys
+    h = img.height
+    span = abs(slope) * h
+    resid = float(np.max(np.abs(an - fit)))
+    if span >= 0.8 and resid <= 1.2:                                       # cambia de arriba a abajo: por franjas
+        def f(y):
+            return float(np.clip(icpt + slope * y, -12, 12))
+        out = keystone_straighten(img, f)
+        biggest = max((f(0), f(h)), key=abs)
+        return out, float(biggest)
+    ang = float(np.average(an, weights=wt))                                # igual en toda la página: un giro
+    if abs(ang) < 0.25:
+        return img, 0.0
+    return img.rotate(ang, resample=Image.BICUBIC, expand=False, fillcolor=_paper_fill(img)), ang
+
+
+def _fix_one(doc, page_idx: int, corners_frac, snap: str, flatten: bool, straighten: bool, force: bool):
+    """Endereza UNA página del documento abierto: perspectiva (con las esquinas dadas, o buscadas solas si no se dan),
+    líneas de texto horizontales y fondo aclarado, y la sustituye en `doc`. Devuelve {"size", "angle", "warped"} o None
+    si no hacía falta tocarla (sin esquinas y con el texto ya recto), salvo con `force`."""
+    img = render_page(doc, page_idx)
+    corners = None
+    if corners_frac:
+        corners = order_corners([(x * img.width, y * img.height) for x, y in corners_frac])
+        if not is_convex(corners) or _area(corners) < 0.02 * img.width * img.height:
+            raise pt.ToolError("Las esquinas no forman un cuadrilátero válido: colócalas en las cuatro esquinas del papel.")
+    elif corners_frac is None:
+        corners = detect_corners(img)                          # si el papel no se distingue del fondo, se sigue sin esquinas
+    size, flat, angle = img.size, img, 0.0
+    if corners:
+        size = target_size(corners, snap)
+        flat = warp(img, corners, size)
+    if straighten:                                             # después de la perspectiva: alinear las líneas de texto
+        flat, angle = straighten_text(flat)
+    if not force and not corners and abs(angle) < 0.25:
+        return None
+    if flatten:
+        flat = flatten_light(flat)
+    buf = io.BytesIO()
+    flat.save(buf, "JPEG", quality=90, optimize=True)
+    k = 841.89 / max(size)
+    new = doc.new_page(pno=page_idx + 1, width=size[0] * k, height=size[1] * k)
+    new.insert_image(new.rect, stream=buf.getvalue())
+    doc.delete_page(page_idx)
+    return {"size": size, "angle": float(angle), "warped": bool(corners)}
+
+
 def fix_page(path: str, page_idx: int, corners_frac: list, snap: str = "auto", flatten: bool = True,
-             password: str = "") -> dict:
+             password: str = "", straighten: bool = True) -> dict:
     """Corrige la perspectiva de una página y la sustituye por la versión plana y recta. `corners_frac` son las
-    cuatro esquinas [TL, TR, BR, BL] como fracción (0–1) del ancho y alto de la página. Devuelve {"out", "size"}."""
+    cuatro esquinas [TL, TR, BR, BL] como fracción (0–1) del ancho y alto de la página. Devuelve {"out", "size", "angle"}."""
     doc = pt._open(path, password)
     try:
         if not 0 <= page_idx < len(doc):
             raise pt.ToolError("Esa página no existe.")
-        img = render_page(doc, page_idx)
-        corners = order_corners([(x * img.width, y * img.height) for x, y in corners_frac])
-        if not is_convex(corners) or _area(corners) < 0.02 * img.width * img.height:
-            raise pt.ToolError("Las esquinas no forman un cuadrilátero válido: colócalas en las cuatro esquinas del papel.")
-        size = target_size(corners, snap)
-        flat = warp(img, corners, size)
-        if flatten:
-            flat = flatten_light(flat)
-        buf = io.BytesIO()
-        flat.save(buf, "JPEG", quality=90, optimize=True)
-        longest = 841.89
-        k = longest / max(size)
-        pw, ph = size[0] * k, size[1] * k
-        new = doc.new_page(pno=page_idx + 1, width=pw, height=ph)
-        new.insert_image(new.rect, stream=buf.getvalue())
-        doc.delete_page(page_idx)
+        res = _fix_one(doc, page_idx, corners_frac, snap, flatten, straighten, True)
         dest = pt.out_path(path, "_enderezado")
         doc.save(str(dest), garbage=3, deflate=True)
     finally:
         doc.close()
-    return {"out": str(dest), "size": size}
+    return {"out": str(dest), "size": res["size"], "angle": res["angle"]}
+
+
+def straighten_pages(path: str, password: str = "", only_scanned: bool = True, flatten: bool = True,
+                     manual: dict | None = None, progress=None) -> tuple:
+    """Endereza las páginas de un PDF hecho con fotos o escaneos (esquinas buscadas solas, o las que se marcaron a mano
+    en `manual` = {página: esquinas}) y guarda el resultado en una carpeta temporal con el mismo nombre. Las páginas
+    que ya están rectas no se tocan. Devuelve (ruta, [(página, grados girados, ¿perspectiva?)])."""
+    import tempfile
+    from pathlib import Path
+    manual = manual or {}
+    doc = pt._open(path, password)
+    changed = []
+    try:
+        pages = pt.ocr_needed_pages(doc) if only_scanned else list(range(len(doc)))
+        for k, i in enumerate(pages):
+            if progress:
+                progress(k, len(pages) * 2)
+            try:
+                r = _fix_one(doc, i, manual.get(i), "auto", flatten, True, i in manual)
+            except pt.ToolError:
+                r = None
+            if r:
+                changed.append((i, r["angle"], r["warped"]))
+        dest = Path(tempfile.mkdtemp(prefix="pdfm_str_")) / (Path(path).stem + ".pdf")
+        doc.save(str(dest), garbage=3, deflate=True)
+    finally:
+        doc.close()
+    return str(dest), changed
+
+
+def ocr_straight(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, password: str = "",
+                 progress=None, enhance: bool = True, straighten: bool = True, flatten: bool = True,
+                 manual: dict | None = None, precise: bool = False, engine: str = "tesseract",
+                 review: bool = False) -> dict:
+    """OCR con enderezado opcional en el mismo paso: primero se endereza cada página (perspectiva y líneas de texto) y
+    después se reconoce el texto sobre la página ya recta."""
+    if not straighten:
+        return pt.ocr(path, languages, dpi, only_scanned, password, progress=progress, enhance=enhance, precise=precise,
+                      engine=engine, review=review)
+    tmp, changed = straighten_pages(path, password, only_scanned, flatten, manual, progress)
+    try:
+        res = pt.ocr(tmp, languages, dpi, only_scanned, "",
+                     progress=(lambda i, n: progress(n + i, n * 2)) if progress else None, enhance=enhance,
+                     precise=precise, engine=engine, review=review)
+    except pt.ToolError:
+        raise
+    res["straightened"] = len(changed)
+    res["angles"] = [round(a, 1) for _i, a, _w in changed]
+    return res

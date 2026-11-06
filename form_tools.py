@@ -86,8 +86,15 @@ def set_widget_value(doc, page_idx: int, xref: int, value) -> bool:
                         w.field_value = w.on_state() if w.xref == xref else "Off"
                         w.update()
         elif kind in ("text", "combo", "list"):
-            target.field_value = str(value)
-            target.update()
+            if str(value) == "":
+                # PyMuPDF ignora un valor vacío y deja el anterior: se pone un espacio (no se ve) para regenerar la
+                # apariencia y después se deja el valor realmente vacío.
+                target.field_value = " "
+                target.update()
+                doc.xref_set_key(xref, "V", "()")
+            else:
+                target.field_value = str(value)
+                target.update()
         else:
             return False
         return True
@@ -141,8 +148,10 @@ def add_field(doc, page_idx: int, rect, spec: dict) -> bool:
         return add_radio_group(doc, page_idx, spec.get("name") or "opcion", spec.get("choices") or [],
                                (r.x0, r.y0), spacing=spacing)
     if kind == "checkbox":
-        side = max(14.0, min(r.width, r.height))
+        side = max(10.0, min(r.width, r.height))
         r = fitz.Rect(r.x0, r.y0, r.x0 + side, r.y0 + side)
+    elif spec.get("box"):
+        r = fitz.Rect(r)                              # cajita ya dibujada: el campo ocupa exactamente la caja
     else:
         r = fitz.Rect(r.x0, r.y0, r.x1, max(r.y1, r.y0 + 16))
     try:
@@ -155,7 +164,7 @@ def add_field(doc, page_idx: int, rect, spec: dict) -> bool:
         w.text_color = (0, 0, 0)
         if kind in ("text", "multiline"):
             w.field_type = fitz.PDF_WIDGET_TYPE_TEXT
-            w.text_fontsize = float(spec.get("fontsize") or 11)
+            w.text_fontsize = float(spec.get("fontsize") or (min(11.0, max(6.0, r.height * 0.7)) if spec.get("box") else 11))
             w.field_value = spec.get("value") or ""
             if kind == "multiline":
                 w.field_flags = (w.field_flags or 0) | fitz.PDF_TX_FIELD_IS_MULTILINE
@@ -175,6 +184,8 @@ def add_field(doc, page_idx: int, rect, spec: dict) -> bool:
             for x in page.annot_xrefs():
                 if x[0] not in before:
                     doc.xref_set_key(x[0], "NM", "(pdfm-field)")        # marca: lo creó el editor (se puede mover)
+                    if spec.get("box"):
+                        doc.xref_set_key(x[0], "Q", "1")                # texto centrado en la cajita
         except Exception:
             pass
         return True
@@ -226,6 +237,32 @@ def _iou_like(a, b) -> float:
     return inter / area
 
 
+def _merge_collinear(items: list, gap: float) -> list:
+    """Une trozos de una misma línea. items = [(posición, inicio, fin)] (p. ej. y, x0, x1 de trozos horizontales); los que
+    están a menos de 1 pt de posición forman una línea y se unen si entre ellos hay como mucho `gap` pt.
+    Devuelve [(posición, inicio, fin, nº de trozos)]."""
+    out: list = []
+    items = sorted(items)
+    i = 0
+    while i < len(items):
+        j = i + 1
+        while j < len(items) and items[j][0] - items[j - 1][0] <= 1.0:
+            j += 1
+        cluster = sorted(items[i:j], key=lambda s: s[1])
+        pos = sum(s[0] for s in cluster) / len(cluster)
+        cur = [pos, cluster[0][1], cluster[0][2], 1]
+        for s in cluster[1:]:
+            if s[1] <= cur[2] + gap:
+                cur[2] = max(cur[2], s[2])
+                cur[3] += 1
+            else:
+                out.append(tuple(cur))
+                cur = [pos, s[1], s[2], 1]
+        out.append(tuple(cur))
+        i = j
+    return out
+
+
 def detect_fields(doc, page_idx: int) -> list[dict]:
     """Posibles campos de una página que no los tiene: líneas y rayas para rellenar (texto), recuadros vacíos
     (texto, o varias líneas si son altos) y casillas pequeñas. Devuelve [{"kind", "rect"}]."""
@@ -245,36 +282,52 @@ def detect_fields(doc, page_idx: int) -> list[dict]:
             cov += ix * iy
         return cov / area
 
-    # 1) rayas de texto: «______» o «.......»
+    # 1) rayas hechas con texto: «______», «.......», «- - - -», «…»; las partidas en varias palabras seguidas se unen
+    leader = set("_.-–—…·•")
+    rows: dict = {}
     for w in words:
-        t = w[4]
-        if (len(t) >= 4 and set(t) <= {"_"}) or (len(t) >= 8 and set(t) <= {"."}):
-            r = (w[0], w[1] - 1.5, w[2], w[3] + 1.0)
-            if r[2] - r[0] >= 30:
-                cands.append({"kind": "text", "rect": r})
+        s = w[4]
+        if len(s) >= 3 and set(s) <= leader and (len(s) >= 4 or set(s) <= {"_", "…"}):
+            rows.setdefault((w[5], w[6]), []).append(w)
+    for ws in rows.values():
+        ws.sort(key=lambda w: w[0])
+        group = [ws[0]]
+        for w in ws[1:] + [None]:
+            if w is not None and w[0] - group[-1][2] <= 8.0:
+                group.append(w)
+                continue
+            x0, x1 = group[0][0], group[-1][2]
+            if x1 - x0 >= 18:
+                cands.append({"kind": "text", "rect": (x0, min(g[1] for g in group) - 1.5, x1,
+                                                        max(g[3] for g in group) + 1.0)})
+            group = [w] if w is not None else []
     # 2) dibujos vectoriales
     try:
         drawings = page.get_drawings()
     except Exception:
         drawings = []
+    segs: list = []                                  # trozos horizontales (x0, x1, y): líneas, rectángulos finos…
+    vsegs: list = []                                 # trozos verticales (x, y0, y1): lados de casillas dibujadas a trozos
     for d in drawings:
+        visible = d.get("color") is not None or d.get("fill") is not None
         for it in d.get("items", []):
             op = it[0]
             if op == "l":
                 p1, p2 = it[1], it[2]
-                if abs(p1.y - p2.y) < 1.0 and abs(p1.x - p2.x) >= 40 and d.get("color") is not None:
-                    x0, x1, y = min(p1.x, p2.x), max(p1.x, p2.x), p1.y
-                    r = (x0, y - 15.0, x1, y + 0.5)
-                    if word_cover(r) < 0.25 and r[2] - r[0] < pr.width * 0.95:
-                        cands.append({"kind": "text", "rect": r})
-            elif op == "re":
-                rc = it[1]
+                if visible and abs(p1.y - p2.y) < 1.0 and abs(p1.x - p2.x) >= 0.8:
+                    segs.append((min(p1.x, p2.x), max(p1.x, p2.x), (p1.y + p2.y) / 2))
+                elif visible and abs(p1.x - p2.x) < 1.0 and abs(p1.y - p2.y) >= 3.0:
+                    vsegs.append(((p1.x + p2.x) / 2, min(p1.y, p2.y), max(p1.y, p2.y)))
+            elif op in ("re", "qu"):
+                rc = it[1] if op == "re" else it[1].rect
                 w_, h_ = rc.width, rc.height
-                if h_ < 1.6 and w_ >= 40 and (d.get("fill") is not None or d.get("color") is not None):
-                    r = (rc.x0, rc.y0 - 15.0, rc.x1, rc.y0 + 0.5)            # línea dibujada como rectángulo fino
-                    if word_cover(r) < 0.25:
-                        cands.append({"kind": "text", "rect": r})
-                elif 6 <= w_ <= 18 and 6 <= h_ <= 18 and abs(w_ - h_) <= 2.5 and d.get("color") is not None:
+                if h_ < 1.6 and w_ >= 0.8 and visible:                        # línea dibujada como rectángulo fino
+                    segs.append((rc.x0, rc.x1, rc.y0 + h_ / 2))
+                elif w_ < 1.6 and h_ >= 3.0 and visible:                      # lado vertical dibujado como rectángulo fino
+                    vsegs.append((rc.x0 + w_ / 2, rc.y0, rc.y1))
+                elif op != "re":
+                    continue
+                elif 6 <= w_ <= 26 and 6 <= h_ <= 26 and abs(w_ - h_) <= 8.0 and d.get("color") is not None:
                     r = (rc.x0, rc.y0, rc.x1, rc.y1)
                     if word_cover(r) < 0.1:
                         cands.append({"kind": "checkbox", "rect": r})
@@ -284,6 +337,52 @@ def detect_fields(doc, page_idx: int) -> list[dict]:
                         r = (rc.x0, rc.y0, rc.x1, rc.y1)
                         if word_cover(r) < 0.05:
                             cands.append({"kind": "multiline" if h_ >= 36 else "text", "rect": r})
+    # líneas que el PDF trae como imágenes finísimas (formularios escaneados o generados con rayas de puntos en bitmap)
+    try:
+        for im in page.get_image_info():
+            ix0, iy0, ix1, iy1 = im["bbox"]
+            if (iy1 - iy0) <= 4.5 and (ix1 - ix0) >= 1.0:
+                segs.append((ix0, ix1, (iy0 + iy1) / 2))
+    except Exception:
+        pass
+    # casillas escritas como símbolo de texto (□ ☐ ❏): se convierten en casillas de verdad
+    for w in words:
+        if w[4] and w[4][0] in "□☐❏❑◻" and len(w[4]) <= 2:
+            cx, cy = (w[0] + w[2]) / 2, (w[1] + w[3]) / 2
+            cands.append({"kind": "checkbox", "rect": (cx - 5.5, cy - 5.5, cx + 5.5, cy + 5.5)})
+    # unir los trozos de una misma línea (rayas de puntos o guiones dibujadas a trozos) y quedarse con las de 18 pt o más
+    merged: list = [(a0, a1, pos, n) for pos, a0, a1, n in _merge_collinear([(s[2], s[0], s[1]) for s in segs], 7.0)]
+    # cajitas pequeñas dibujadas con cuatro lados (H, M, S, C, V…): se convierten en casillas de TEXTO, para poder
+    # escribir en ellas una X (o lo que haga falta) en vez de ser solo de marcar
+    vmerged: list = [(pos, a0, a1) for pos, a0, a1, _n in _merge_collinear(vsegs, 3.0)]
+    small = [m for m in merged if 6.0 <= m[1] - m[0] <= 30.0]
+    for i, a in enumerate(small):
+        for b in small[i + 1:]:
+            dy = b[2] - a[2]
+            if 6.0 <= dy <= 30.0 and abs(a[0] - b[0]) <= 1.5 and abs(a[1] - b[1]) <= 1.5:
+                def side(x):
+                    return any(abs(v[0] - x) <= 1.5 and v[1] <= a[2] + 1.5 and v[2] >= b[2] - 1.5 for v in vmerged)
+                if side(a[0]) and side(a[1]):
+                    r = (a[0], a[2], a[1], b[2])
+                    if word_cover(r) < 0.1:
+                        cands.append({"kind": "text", "rect": r, "box": True})
+    for x0, x1, y, _n in merged:
+        if x1 - x0 >= pr.width * 0.95:
+            continue
+        # una línea que pasa por debajo de etiquetas («Provincia», «NIF/NIE»…) se parte alrededor de ellas
+        cuts = sorted((w[0] - 1.0, w[2] + 1.0) for w in words
+                      if y - 13.0 <= (w[1] + w[3]) / 2 <= y + 2.0 and w[2] > x0 and w[0] < x1 and not set(w[4]) <= leader)
+        pieces, cur = [], x0
+        for c0, c1 in cuts:
+            if c0 - cur >= 1.0:
+                pieces.append((cur, min(c0, x1)))
+            cur = max(cur, c1)
+        if x1 - cur >= 1.0:
+            pieces.append((cur, x1))
+        for a, b in pieces:
+            r = (a, y - 15.0, b, y + 0.5)
+            if b - a >= 24 and word_cover(r) < 0.25:
+                cands.append({"kind": "text", "rect": r})
     # filtrar: nada sobre campos existentes, sin duplicados
     out: list[dict] = []
     for c in cands:
@@ -312,7 +411,7 @@ def create_detected(doc, found: dict) -> int:
     for pi, items in found.items():
         for c in items:
             base = {"text": "texto", "multiline": "notas", "checkbox": "casilla"}.get(c["kind"], "campo")
-            if add_field(doc, pi, c["rect"], {"kind": c["kind"], "name": base}):
+            if add_field(doc, pi, c["rect"], {"kind": c["kind"], "name": base, "box": c.get("box", False)}):
                 n += 1
     return n
 

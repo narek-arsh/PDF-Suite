@@ -238,6 +238,86 @@ def _close(p, s):
     p.drawLine(QPointF(s * 0.76, s * 0.24), QPointF(s * 0.24, s * 0.76))
 
 
+def _select(p, s):
+    """Puntero de ratón."""
+    _stroke(p, s, 0.09)
+    poly = QPolygonF([QPointF(s * 0.28, s * 0.14), QPointF(s * 0.28, s * 0.80), QPointF(s * 0.46, s * 0.63),
+                      QPointF(s * 0.60, s * 0.88), QPointF(s * 0.70, s * 0.83), QPointF(s * 0.56, s * 0.58),
+                      QPointF(s * 0.80, s * 0.56)])
+    p.drawPolygon(poly)
+
+
+def _rect(p, s):
+    _stroke(p, s, 0.10)
+    p.drawRoundedRect(QRectF(s * 0.14, s * 0.24, s * 0.72, s * 0.52), s * 0.04, s * 0.04)
+
+
+def _ellipse(p, s):
+    _stroke(p, s, 0.10)
+    p.drawEllipse(QRectF(s * 0.12, s * 0.22, s * 0.76, s * 0.56))
+
+
+def _line(p, s):
+    _stroke(p, s, 0.11)
+    p.drawLine(QPointF(s * 0.16, s * 0.82), QPointF(s * 0.84, s * 0.18))
+
+
+def _arrow(p, s):
+    _stroke(p, s, 0.11)
+    p.drawLine(QPointF(s * 0.16, s * 0.84), QPointF(s * 0.82, s * 0.18))
+    p.drawLine(QPointF(s * 0.82, s * 0.18), QPointF(s * 0.82, s * 0.50))
+    p.drawLine(QPointF(s * 0.82, s * 0.18), QPointF(s * 0.50, s * 0.18))
+
+
+def _rot_right(p, s):
+    """Flecha circular en sentido horario: arco de unos 270° con una punta triangular rellena al final."""
+    import math
+    _stroke(p, s, 0.11)
+    cx, cy, r = s * 0.5, s * 0.54, s * 0.30
+    start, sweep = 120.0, 250.0                         # empieza arriba a la izquierda y gira en sentido horario
+    p.drawArc(QRectF(cx - r, cy - r, 2 * r, 2 * r), int(start * 16), int(-sweep * 16))
+    te = math.radians(start - sweep)
+    ex, ey = cx + r * math.cos(te), cy - r * math.sin(te)
+    tx, ty = math.sin(te), math.cos(te)                 # dirección de avance en el extremo
+    nx, ny = -ty, tx                                    # normal
+    h, w = s * 0.24, s * 0.15
+    tip = QPointF(ex + tx * h * 0.55, ey + ty * h * 0.55)
+    b1 = QPointF(ex - tx * h * 0.45 + nx * w, ey - ty * h * 0.45 + ny * w)
+    b2 = QPointF(ex - tx * h * 0.45 - nx * w, ey - ty * h * 0.45 - ny * w)
+    _fill(p)
+    p.drawPolygon(QPolygonF([tip, b1, b2]))
+
+
+def _rot_left(p, s):
+    p.translate(s, 0)
+    p.scale(-1, 1)
+    _rot_right(p, s)
+
+
+def _text_t(p, s):
+    """Una T (texto plano)."""
+    _stroke(p, s, 0.14)
+    p.drawLine(QPointF(s * 0.2, s * 0.24), QPointF(s * 0.8, s * 0.24))
+    p.drawLine(QPointF(s * 0.5, s * 0.24), QPointF(s * 0.5, s * 0.82))
+
+
+def _text_add(p, s):
+    """A con un + elevado (añadir texto nuevo)."""
+    _stroke(p, s, 0.12)
+    p.drawLine(QPointF(s * 0.10, s * 0.84), QPointF(s * 0.38, s * 0.24))
+    p.drawLine(QPointF(s * 0.38, s * 0.24), QPointF(s * 0.66, s * 0.84))
+    p.drawLine(QPointF(s * 0.20, s * 0.64), QPointF(s * 0.56, s * 0.64))
+    _stroke(p, s, 0.09)
+    p.drawLine(QPointF(s * 0.84, s * 0.10), QPointF(s * 0.84, s * 0.40))
+    p.drawLine(QPointF(s * 0.69, s * 0.25), QPointF(s * 0.99, s * 0.25))
+
+
+def _plus(p, s):
+    _stroke(p, s, 0.12)
+    p.drawLine(QPointF(s * 0.5, s * 0.2), QPointF(s * 0.5, s * 0.8))
+    p.drawLine(QPointF(s * 0.2, s * 0.5), QPointF(s * 0.8, s * 0.5))
+
+
 def _glyph(p, s, text: str, bold: bool = False, italic: bool = False):
     """Letra centrada, dibujada como contorno (para los iconos B e I)."""
     from PySide6.QtGui import QFont
@@ -478,5 +558,5 @@ _DRAWERS = {
     "back": _back, "forward": _forward, "check": _check, "close": _close,
     "trash": _trash, "clip": _clip, "bold": _bold, "italic": _italic, "chevron_down": _chevron_down,
     "document": _document, "resize": _resize, "crop": _crop, "nup": _nup,
-    "bolt": _bolt, "play": _play,
+    "bolt": _bolt, "play": _play, "plus": _plus, "text_t": _text_t, "text_add": _text_add, "rot_left": _rot_left, "rot_right": _rot_right, "select": _select, "rect": _rect, "ellipse": _ellipse, "line": _line, "arrow": _arrow,
 }

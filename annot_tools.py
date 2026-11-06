@@ -6,6 +6,7 @@ resaltar, subrayar y tachar texto, y quitar esas marcas. Sin dependencias de int
 Las marcas son anotaciones estándar del PDF (las ve cualquier lector) y no tocan el texto.
 Coordenadas siempre en puntos PDF de la página.
 """
+import os
 import fitz
 
 # Colores (RGB 0-1) de las marcas
@@ -90,7 +91,8 @@ def add_markup(doc, page_idx: int, rects: list, kind: str, color_name: str | Non
     """Añade una marca (highlight / underline / strike) sobre las cajas dadas. Devuelve cuántas líneas marcó."""
     if kind not in _ADD or not rects:
         return 0
-    color = COLORS.get(color_name or DEFAULT_COLOR[kind], COLORS["amarillo"])
+    color = (tuple(float(c) for c in color_name) if isinstance(color_name, (tuple, list))
+             else COLORS.get(color_name or DEFAULT_COLOR[kind], COLORS["amarillo"]))
     page = doc[page_idx]
     n = 0
     for r in rects:
@@ -150,6 +152,39 @@ SHAPE_COLORS = {
     "naranja": (1.0, 0.55, 0.1), "amarillo": (1.0, 0.85, 0.1), "rosa": (1.0, 0.45, 0.7), "gris": (0.55, 0.55, 0.55),
 }
 SHAPE_KINDS = ("rect", "ellipse", "line", "arrow")
+
+
+def rgb_of(c):
+    """Color como (r, g, b) en 0..1 a partir de un nombre de SHAPE_COLORS, un '#rrggbb' o una tupla."""
+    if c is None:
+        return None
+    if isinstance(c, str):
+        if c.startswith("#") and len(c) == 7:
+            return tuple(int(c[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+        return SHAPE_COLORS.get(c, SHAPE_COLORS["rojo"])
+    return tuple(float(v) for v in c)
+
+
+# Puntas de flecha: nombre -> (extremo inicial, extremo final)
+_LE = fitz
+HEADS = {
+    "closed": (fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW),
+    "open": (fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_OPEN_ARROW),
+    "diamond": (fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_DIAMOND),
+    "circle": (fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CIRCLE),
+    "square": (fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_SQUARE),
+    "double": (fitz.PDF_ANNOT_LE_CLOSED_ARROW, fitz.PDF_ANNOT_LE_CLOSED_ARROW),
+}
+HEAD_LABELS = (("closed", "Punta triangular"), ("open", "Punta abierta"), ("diamond", "Rombo"),
+               ("circle", "Círculo"), ("square", "Cuadrado"), ("double", "Doble flecha"))
+
+
+def head_of(annot) -> str:
+    le = tuple(annot.line_ends or (0, 0))
+    for name, ends in HEADS.items():
+        if tuple(le) == tuple(ends):
+            return name
+    return "closed"
 TAG = "PDFManager"          # lo que dibuja el editor lleva esta marca; lo que trae el PDF no se toca
 _SHAPE_TYPES = {fitz.PDF_ANNOT_SQUARE, fitz.PDF_ANNOT_CIRCLE, fitz.PDF_ANNOT_LINE}
 
@@ -173,30 +208,64 @@ def snap_points(p0, p1, kind):
     return _snap(p0, p1, kind)
 
 
-def add_shape(doc, page_idx: int, kind: str, p0: tuple, p1: tuple, color: str = "rojo",
-              width: float = 2.0, fill: str | None = None) -> bool:
+FILL_KEY = "PDFMgrFillCA"
+
+
+def _patch_fill_opacity(annot, stroke_op: float, fill_op) -> None:
+    """Opacidad del relleno distinta de la del trazo: se corrige el estado gráfico de la apariencia (/ca) y se anota
+    en el propio objeto para poder leerla luego. Debe llamarse DESPUÉS de annot.update()."""
+    try:
+        doc = annot.parent.parent
+        x = annot.xref
+        if fill_op is None or abs(float(fill_op) - float(stroke_op)) < 0.005:
+            doc.xref_set_key(x, FILL_KEY, "null")
+            return
+        ap = doc.xref_get_key(x, "AP/N")
+        if ap[0] == "xref":
+            n = int(ap[1].split()[0])
+            stream = doc.xref_stream(n) or b""
+            if b"/H gs" not in stream:                 # con opacidad 100 % la apariencia no trae estado gráfico
+                if stream.startswith(b"q\n"):
+                    stream = b"q\n/H gs\n" + stream[2:]
+                else:
+                    stream = b"q\n/H gs\n" + stream + b"\nQ\n"
+                doc.update_stream(n, stream)
+            doc.xref_set_key(n, "Resources/ExtGState/H", "<</CA %.3f /ca %.3f>>" % (float(stroke_op), float(fill_op)))
+        doc.xref_set_key(x, FILL_KEY, "%.3f" % float(fill_op))
+    except Exception:
+        pass
+
+
+def add_shape(doc, page_idx: int, kind: str, p0: tuple, p1: tuple, color="rojo",
+              width: float = 2.0, fill=None, opacity: float = 1.0, head: str = "closed",
+              stroke_opacity=None, fill_opacity=None) -> bool:
     """Dibuja un rectángulo, elipse, línea o flecha como anotación del PDF."""
     if kind not in SHAPE_KINDS:
         return False
     if abs(p0[0] - p1[0]) < 2 and abs(p0[1] - p1[1]) < 2:
         return False
     page = doc[page_idx]
-    stroke = SHAPE_COLORS.get(color, SHAPE_COLORS["rojo"])
-    fillc = SHAPE_COLORS.get(fill) if fill else None
+    stroke = rgb_of(color) or SHAPE_COLORS["rojo"]
+    fillc = rgb_of(fill) if fill else None
     try:
         if kind in ("rect", "ellipse"):
             r = fitz.Rect(min(p0[0], p1[0]), min(p0[1], p1[1]), max(p0[0], p1[0]), max(p0[1], p1[1]))
             annot = page.add_rect_annot(r) if kind == "rect" else page.add_circle_annot(r)
             annot.set_colors(stroke=stroke, fill=fillc)
-            annot.set_opacity(0.5 if fillc else 1.0)
+            annot.set_opacity(float(stroke_opacity if stroke_opacity is not None else opacity))
         else:
             annot = page.add_line_annot(fitz.Point(p0), fitz.Point(p1))
             annot.set_colors(stroke=stroke, fill=stroke if kind == "arrow" else None)   # punta rellena
             if kind == "arrow":
-                annot.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW)
+                annot.set_line_ends(*HEADS.get(head, HEADS["closed"]))
+        if kind not in ("rect", "ellipse"):
+            annot.set_opacity(float(stroke_opacity if stroke_opacity is not None else opacity))
         annot.set_border(width=float(width))
         annot.set_info(title=TAG)
         annot.update()
+        if kind in ("rect", "ellipse") and fillc:
+            _patch_fill_opacity(annot, stroke_opacity if stroke_opacity is not None else opacity,
+                                fill_opacity if fill_opacity is not None else opacity)
         return True
     except Exception:
         return False
@@ -275,11 +344,13 @@ def move_shape(doc, page_idx: int, desc: dict, dx: float, dy: float) -> bool:
         else:
             new = page.add_line_annot(fitz.Point(p0), fitz.Point(p1))
             if desc["kind"] == "arrow":
-                new.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW)
+                new.set_line_ends(*HEADS.get(desc.get("head", "closed"), HEADS["closed"]))
         new.set_colors(stroke=desc["stroke"], fill=desc["fill"])
         new.set_opacity(desc["opacity"] if desc["opacity"] >= 0 else 1.0)
         new.set_border(width=float(desc["width"]))
         new.update()
+        if desc["kind"] in ("rect", "ellipse"):
+            _patch_fill_opacity(new, desc["opacity"] if desc["opacity"] >= 0 else 1.0, desc.get("fill_opacity"))
         return True
     except Exception:
         return False
@@ -306,10 +377,10 @@ def add_ink(doc, page_idx: int, points: list, color: str = "rojo", width: float 
     page = doc[page_idx]
     try:
         annot = page.add_ink_annot([[(float(x), float(y)) for x, y in pts]])
-        annot.set_colors(stroke=SHAPE_COLORS.get(color, SHAPE_COLORS["rojo"]))
+        annot.set_colors(stroke=rgb_of(color) or SHAPE_COLORS["rojo"])
         annot.set_border(width=float(width) * (5 if marker else 1))
         annot.set_opacity(0.4 if marker else 1.0)
-        annot.set_info(title=TAG)
+        annot.set_info(title=TAG, subject="marker" if marker else "pen")
         annot.update()
         return True
     except Exception:
@@ -325,9 +396,34 @@ def _ink_hit(annot, pt, tol=6.0) -> bool:
 
 
 # ── Imágenes (y firmas) como sellos: se pueden mover, escalar y borrar ────
+def readable_image(source):
+    """Devuelve la imagen en un formato que PyMuPDF lee. WEBP y otros que PyMuPDF no conoce se pasan a PNG con
+    Pillow (con su transparencia): ruta nueva en una carpeta temporal si era un archivo, o bytes si eran bytes."""
+    try:
+        fitz.Pixmap(source)
+        return source
+    except Exception:
+        pass
+    import io
+    import tempfile
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(source) if isinstance(source, (bytes, bytearray)) else source)
+        im = im.convert("RGBA") if im.mode in ("P", "LA", "RGBA", "PA") else im.convert("RGB")
+        if isinstance(source, (bytes, bytearray)):
+            buf = io.BytesIO()
+            im.save(buf, "PNG")
+            return buf.getvalue()
+        out = os.path.join(tempfile.mkdtemp(prefix="pdfm_img_"), os.path.splitext(os.path.basename(source))[0] + ".png")
+        im.save(out, "PNG")
+        return out
+    except Exception:
+        return source
+
+
 def image_size(source) -> tuple[int, int]:
     """Tamaño en píxeles de una imagen (ruta o bytes)."""
-    pm = fitz.Pixmap(source) if isinstance(source, str) else fitz.Pixmap(source)
+    pm = fitz.Pixmap(readable_image(source))
     return pm.width, pm.height
 
 
@@ -353,11 +449,67 @@ def add_image(doc, page_idx: int, rect, source) -> int | None:
     """Añade una imagen (ruta o bytes) como sello; devuelve su xref, o None si falla."""
     page = doc[page_idx]
     try:
-        annot = page.add_stamp_annot(fitz.Rect(rect), stamp=source)
+        annot = page.add_stamp_annot(fitz.Rect(rect), stamp=readable_image(source))
         annot.update()
         return annot.xref
     except Exception:
         return None
+
+
+def add_click_icon(doc, page_idx: int, rect, key: str, angle: float = 0.0) -> int | None:
+    """Icono de «haz clic aquí» (cursor o mano) como sello que se puede mover, escalar y girar."""
+    import click_icons as ci
+    try:
+        annot = doc[page_idx].add_stamp_annot(fitz.Rect(rect), stamp=ci.render_png(key, angle, 256))
+        annot.set_info(subject=ci.subject(key, angle))
+        annot.update()
+        return annot.xref
+    except Exception:
+        return None
+
+
+def rotate_click_icon(doc, page_idx: int, xref: int, angle: float, key: str | None = None):
+    """Vuelve a dibujar un icono de clic girado a `angle` grados, en la misma caja. Devuelve (xref nuevo, caja) o None."""
+    import click_icons as ci
+    page = doc[page_idx]
+    for annot in (page.annots() or []):
+        if annot.xref == xref:
+            parsed = ci.parse_subject((annot.info or {}).get("subject", ""))
+            if not parsed:
+                return None
+            r = annot.rect
+            rect = (r.x0, r.y0, r.x1, r.y1)
+            try:
+                page.delete_annot(annot)
+            except Exception:
+                return None
+            new = add_click_icon(doc, page_idx, rect, key or parsed[0], angle)
+            return (new, rect) if new else None
+    return None
+
+
+def stamp_png(doc, page_idx: int, xref: int):
+    """PNG (con transparencia) de un sello/imagen/icono, para mostrarlo mientras se arrastra."""
+    for annot in (doc[page_idx].annots() or []):
+        if annot.xref == xref:
+            try:
+                return annot.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=True).tobytes("png")
+            except Exception:
+                return None
+    return None
+
+
+def set_stamp_hidden(doc, page_idx: int, xref: int, hidden: bool) -> bool:
+    """Oculta o muestra un sello mientras se arrastra (no se borra: solo deja de dibujarse)."""
+    for annot in (doc[page_idx].annots() or []):
+        if annot.xref == xref:
+            try:
+                fl = annot.flags
+                annot.set_flags((fl | fitz.PDF_ANNOT_IS_HIDDEN) if hidden else (fl & ~fitz.PDF_ANNOT_IS_HIDDEN))
+                return True
+            except Exception:
+                return False
+    return False
 
 
 def stamp_at(doc, page_idx: int, pt: tuple) -> dict | None:
@@ -368,7 +520,8 @@ def stamp_at(doc, page_idx: int, pt: tuple) -> dict | None:
         if annot.type[0] == fitz.PDF_ANNOT_STAMP:
             r = annot.rect
             if r.x0 <= pt[0] <= r.x1 and r.y0 <= pt[1] <= r.y1:
-                found = {"xref": annot.xref, "rect": (r.x0, r.y0, r.x1, r.y1)}
+                found = {"xref": annot.xref, "rect": (r.x0, r.y0, r.x1, r.y1),
+                         "subject": (annot.info or {}).get("subject", "")}
     return found
 
 
@@ -541,16 +694,23 @@ def describe_editable(annot) -> dict:
     op = annot.opacity
     d = {"xref": annot.xref, "stroke": cols.get("stroke") or None, "fill": cols.get("fill") or None,
          "width": (annot.border or {}).get("width", 1.0) or 1.0, "opacity": op if op is not None and op >= 0 else 1.0}
+    try:
+        fo = annot.parent.parent.xref_get_key(annot.xref, FILL_KEY)
+        d["fill_opacity"] = float(fo[1]) if fo[0] != "null" else d["opacity"]
+    except Exception:
+        d["fill_opacity"] = d["opacity"]
     if t == fitz.PDF_ANNOT_INK:
         d["kind"] = "ink"
         d["strokes"] = [[(float(p[0]), float(p[1])) for p in st] for st in (annot.vertices or [])]
-        d["marker"] = d["opacity"] < 0.9
+        subj = (annot.info or {}).get("subject", "")
+        d["marker"] = (subj == "marker") if subj in ("marker", "pen") else d["opacity"] < 0.9
     elif t == fitz.PDF_ANNOT_POLYGON:
         d["kind"] = "poly"
         d["pts"] = [(float(p[0]), float(p[1])) for p in (annot.vertices or [])]
     elif t == fitz.PDF_ANNOT_LINE:
         v = annot.vertices
-        d["kind"] = "arrow" if annot.line_ends and annot.line_ends[1] != fitz.PDF_ANNOT_LE_NONE else "line"
+        d["kind"] = "arrow" if annot.line_ends and any(e != fitz.PDF_ANNOT_LE_NONE for e in annot.line_ends) else "line"
+        d["head"] = head_of(annot)
         d["p0"], d["p1"] = (float(v[0][0]), float(v[0][1])), (float(v[-1][0]), float(v[-1][1]))
     else:
         r = annot.rect
@@ -593,6 +753,16 @@ def editable_at(doc, page_idx: int, pt: tuple, edge_only: bool = False) -> dict 
                 or (t == fitz.PDF_ANNOT_POLYGON and _poly_hit(annot, pt, ignore_fill=edge_only))):
             found = annot
     return describe_editable(found) if found is not None else None
+
+
+def last_editable(doc, page_idx: int) -> dict | None:
+    """La última forma o trazo creado por el editor en la página (la recién dibujada)."""
+    found = None
+    for annot in (doc[page_idx].annots() or []):
+        t = annot.type[0]
+        if _ours(annot) and (t in _SHAPE_TYPES or t in (fitz.PDF_ANNOT_INK, fitz.PDF_ANNOT_POLYGON)):
+            found = describe_editable(annot)
+    return found
 
 
 ROT_OFFSET = 22.0           # distancia (puntos) del tirador de giro sobre la caja
@@ -691,11 +861,16 @@ def rebuild(doc, page_idx: int, d: dict, geom: dict, delete_old: bool = True, st
             new = page.add_line_annot(fitz.Point(geom["p0"]), fitz.Point(geom["p1"]))
             new.set_colors(stroke=n["stroke"], fill=n["stroke"] if kind == "arrow" else None)
             if kind == "arrow":
-                new.set_line_ends(fitz.PDF_ANNOT_LE_NONE, fitz.PDF_ANNOT_LE_CLOSED_ARROW)
+                new.set_line_ends(*HEADS.get(n.get("head", "closed"), HEADS["closed"]))
         new.set_opacity(float(n["opacity"]))
         new.set_border(width=float(n["width"]))
-        new.set_info(title=TAG)
+        if kind == "ink":
+            new.set_info(title=TAG, subject="marker" if n.get("marker") else "pen")
+        else:
+            new.set_info(title=TAG)
         new.update()
+        if kind in ("rect", "ellipse", "poly"):
+            _patch_fill_opacity(new, n["opacity"], n.get("fill_opacity") if n.get("fill") else None)
         return describe_editable(new)
     except Exception:
         return None
@@ -783,6 +958,9 @@ def duplicate_stamp(doc, page_idx: int, xref: int, dx: float = 14, dy: float = 1
                 pm = annot.get_pixmap(matrix=fitz.Matrix(3, 3), alpha=True)
                 r = annot.rect + (dx, dy, dx, dy)
                 new = page.add_stamp_annot(r, stamp=pm)
+                subj = (annot.info or {}).get("subject", "")
+                if subj:
+                    new.set_info(subject=subj)
                 new.update()
                 return new.xref, (r.x0, r.y0, r.x1, r.y1)
             except Exception:
@@ -878,7 +1056,60 @@ def delete_annot_by_xref(doc, page_idx: int, xref: int) -> bool:
     return False
 
 
+CLIP_SIZE = 18.0           # tamaño del clip en la página (puntos); su dibujo se hace sobre una caja de 22
+_CLIP_BOX = 22.0
+
+# Apariencia del clip: círculo oscuro con borde blanco y el clip en blanco (se ve sobre cualquier fondo, claro u oscuro)
+_CLIP_AP = (b"q\n0.13 0.13 0.13 rg\n1 1 1 RG\n1 w\n"
+            b"11 21.5 m\n16.8 21.5 21.5 16.8 21.5 11 c\n21.5 5.2 16.8 0.5 11 0.5 c\n5.2 0.5 0.5 5.2 0.5 11 c\n"
+            b"0.5 16.8 5.2 21.5 11 21.5 c\nh B\n"
+            b"1 1 1 RG\n1.5 w\n1 J\n1 j\n"
+            b"8.4 6.4 m\n8.4 14.2 l\n8.4 16.6 13.2 16.6 13.2 14.2 c\n13.2 7.2 l\n13.2 5.4 10.2 5.4 10.2 7.2 c\n"
+            b"10.2 13.0 l\nS\nQ\n")
+
+
+def _clip_rect(page, cx: float, cy: float):
+    """Caja del clip centrada en (cx, cy) y dentro de la página."""
+    s = CLIP_SIZE
+    x = min(max(page.rect.x0, cx - s / 2), page.rect.x1 - s)
+    y = min(max(page.rect.y0, cy - s / 2), page.rect.y1 - s)
+    return fitz.Rect(x, y, x + s, y + s)
+
+
+def strip_popup(doc, page, annot) -> None:
+    """Quita la anotación emergente (la caja amarilla con el texto) que PyMuPDF crea junto a notas y adjuntos: algunos
+    visores, como Chrome, la dejan abierta tapando la página."""
+    try:
+        import re
+        pk = doc.xref_get_key(annot.xref, "Popup")
+        if pk[0] != "xref":
+            return
+        px = int(pk[1].split()[0])
+        doc.xref_set_key(annot.xref, "Popup", "null")
+        ak = doc.xref_get_key(page.xref, "Annots")
+        if ak[0] == "array":
+            refs = [r for r in re.findall(r"(\d+)\s+0\s+R", ak[1]) if int(r) != px]
+            doc.xref_set_key(page.xref, "Annots", "[" + " ".join(f"{r} 0 R" for r in refs) + "]")
+    except Exception:
+        pass
+
+
+def move_attachment(doc, page_idx: int, xref: int, dx: float, dy: float) -> bool:
+    """Mueve el clip de un adjunto (conserva su apariencia)."""
+    page = doc[page_idx]
+    for annot in (page.annots() or []):
+        if annot.xref == xref:
+            try:
+                r = annot.rect
+                annot.set_rect(_clip_rect(page, (r.x0 + r.x1) / 2 + dx, (r.y0 + r.y1) / 2 + dy))
+                return True
+            except Exception:
+                return False
+    return False
+
+
 def add_attachment(doc, page_idx: int, pt: tuple, path: str) -> bool:
+    """Adjunta un archivo al PDF y pone el icono del clip CENTRADO en `pt`."""
     import os
     page = doc[page_idx]
     try:
@@ -888,9 +1119,14 @@ def add_attachment(doc, page_idx: int, pt: tuple, path: str) -> bool:
             data = fh.read()
         name = os.path.basename(path)
         annot = page.add_file_annot(fitz.Point(pt), data, name, desc=name, icon="Paperclip")
-        annot.set_colors(stroke=(0.3, 0.3, 0.3))
         annot.set_info(subject="PDFManager-adjunto")
         annot.update()
+        xr = doc.get_new_xref()                                         # apariencia propia, con contraste
+        doc.update_object(xr, "<</Type/XObject/Subtype/Form/BBox[0 0 %g %g]/Resources<<>>>>" % (_CLIP_BOX, _CLIP_BOX))
+        doc.update_stream(xr, _CLIP_AP)
+        doc.xref_set_key(annot.xref, "AP", "<</N %d 0 R>>" % xr)
+        strip_popup(doc, page, annot)                                   # sin la «cajita» amarilla con el nombre
+        annot.set_rect(_clip_rect(page, pt[0], pt[1]))
         return True
     except Exception:
         return False
@@ -904,7 +1140,8 @@ def attachment_at(doc, page_idx: int, pt: tuple) -> dict | None:
             r = annot.rect
             if r.x0 - 3 <= pt[0] <= r.x1 + 3 and r.y0 - 3 <= pt[1] <= r.y1 + 3:
                 fi = annot.file_info or {}
-                found = {"xref": annot.xref, "name": fi.get("filename", "adjunto"), "size": fi.get("size", 0)}
+                found = {"xref": annot.xref, "name": fi.get("filename", "adjunto"), "size": fi.get("size", 0),
+                         "rect": (r.x0, r.y0, r.x1, r.y1)}
     return found
 
 

@@ -70,7 +70,7 @@ QFrame#Card {{
     border-radius: 14px;
 }}
 
-QLineEdit, QTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
+QLineEdit, QTextEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {{
     background-color: {SURFACE_2};
     color: {TEXT};
     border: 1px solid {BORDER_STRONG};

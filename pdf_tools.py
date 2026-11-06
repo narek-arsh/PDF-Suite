@@ -336,12 +336,40 @@ def supported_extensions() -> list:
     return sorted(IMAGE_EXT | TEXT_EXT | HTML_EXT | {".md"} | OFFICE_EXT | NATIVE_EXT)
 
 
+def _upright_copy(path: str) -> str:
+    """Las fotos del móvil traen una marca de orientación (EXIF) en vez de estar giradas de verdad. Si la tiene, se
+    guarda una copia ya derecha en una carpeta temporal y se devuelve su ruta; si no, la misma ruta."""
+    try:
+        from PIL import Image, ImageOps
+        with Image.open(path) as im:
+            if im.format not in ("JPEG", "MPO", "TIFF", "PNG", "WEBP"):
+                return path
+            if im.format == "WEBP":                                # PyMuPDF no lee WEBP: se pasa a PNG (con transparencia)
+                fixed = ImageOps.exif_transpose(im.convert("RGBA") if im.mode in ("P", "LA", "RGBA") else im.convert("RGB"))
+                tmp = Path(tempfile.mkdtemp(prefix="pdfm_img_")) / (Path(path).stem + ".png")
+                fixed.save(tmp, "PNG")
+                return str(tmp)
+            if (im.getexif().get(0x0112, 1) or 1) == 1:
+                return path
+            fixed = ImageOps.exif_transpose(im)
+            tmp = Path(tempfile.mkdtemp(prefix="pdfm_img_")) / (Path(path).stem + (".jpg" if im.format in ("JPEG", "MPO") else ".png"))
+            if tmp.suffix == ".jpg":
+                fixed.convert("RGB").save(tmp, "JPEG", quality=95, subsampling=0)
+            else:
+                fixed.save(tmp, "PNG")
+            return str(tmp)
+    except Exception:
+        return path
+
+
 def images_to_pdf(paths: list, page_size: str = "A4", margin: float = 24.0, dest_name: str = "") -> str:
     """Una imagen por página. page_size 'Ajustar' = cada página del tamaño de su imagen; 'A4'/'Carta' = centrada."""
     if not paths:
         raise ToolError("No hay imágenes.")
     doc = fitz.open()
     for p in paths:
+        orig = p
+        p = _upright_copy(p)                                      # aplica la orientación de las fotos de móvil
         try:
             img = fitz.open(p)                                    # soporta también TIFF de varias páginas
             for k in range(len(img)):
@@ -364,7 +392,7 @@ def images_to_pdf(paths: list, page_size: str = "A4", margin: float = 24.0, dest
             img.close()
         except Exception:
             doc.close()
-            raise ToolError(f"No se pudo leer la imagen «{Path(p).name}».")
+            raise ToolError(f"No se pudo leer la imagen «{Path(orig).name}».")
     dest = _unique(DOWNLOADS / ((dest_name or (Path(paths[0]).stem if len(paths) == 1 else "imagenes")) + ".pdf"))
     doc.save(str(dest), garbage=3, deflate=True)
     doc.close()
@@ -655,6 +683,15 @@ def user_tessdata_dir() -> Path:
     return Path(os.environ.get("APPDATA") or Path.home()) / "PDFManager" / "tessdata"
 
 
+def best_tessdata_dir() -> Path:
+    """Datos de idioma de alta precisión (tessdata_best): más lentos, pero leen mejor el texto borroso."""
+    return Path(os.environ.get("APPDATA") or Path.home()) / "PDFManager" / "tessdata_best"
+
+
+def best_available(lang: str) -> bool:
+    return (best_tessdata_dir() / f"{lang}.traineddata").is_file()
+
+
 def tessdata_dirs() -> list:
     """Carpetas donde buscar idiomas, por orden: junto al programa (instalador), carpeta del usuario, Tesseract
     instalado, TESSDATA_PREFIX."""
@@ -687,12 +724,14 @@ def ocr_needed_pages(doc, min_chars: int = 25) -> list:
     return out
 
 
-def _ascii_tessdata(languages: list, avail: dict) -> str:
+def _ascii_tessdata(languages: list, avail: dict, precise: bool = False) -> str:
     """Tesseract en Windows no abre archivos cuyo camino tenga tildes, ñ u otros caracteres no ASCII (por ejemplo
-    una carpeta de usuario con tilde). Se copian los idiomas pedidos a una carpeta de ruta sencilla y se usa esa."""
-    cands = [Path(tempfile.gettempdir()) / "pdfm_tessdata",
-             Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "PDFManager" / "tessdata",
-             Path(r"C:\Users\Public\PDFManager\tessdata")]
+    una carpeta de usuario con tilde). Se copian los idiomas pedidos a una carpeta de ruta sencilla y se usa esa.
+    Con `precise`, cada idioma usa sus datos de alta precisión si están descargados (y si no, los normales)."""
+    sub = "tessdata_hq" if precise else "tessdata"
+    cands = [Path(tempfile.gettempdir()) / ("pdfm_" + sub),
+             Path(os.environ.get("ProgramData", r"C:\ProgramData")) / "PDFManager" / sub,
+             Path(r"C:\Users\Public\PDFManager") / sub]
     for d in cands:
         if not str(d).isascii():
             continue
@@ -700,6 +739,8 @@ def _ascii_tessdata(languages: list, avail: dict) -> str:
             d.mkdir(parents=True, exist_ok=True)
             for lang in languages:
                 src = Path(avail[lang]) / f"{lang}.traineddata"
+                if precise and best_available(lang):
+                    src = best_tessdata_dir() / f"{lang}.traineddata"
                 dst = d / f"{lang}.traineddata"
                 if not dst.exists() or dst.stat().st_size != src.stat().st_size:
                     shutil.copy2(src, dst)
@@ -773,6 +814,28 @@ def _deskew_angle(gray, rng: float = 20.0) -> float:
     return best if abs(best) >= 0.2 else 0.0
 
 
+def _deskew_scan(gray, rng: float = 12.0) -> tuple:
+    """(grados para enderezar el texto, confianza). La confianza compara lo nítidas que quedan las líneas con el mejor
+    giro frente a la media de todos los giros probados: cerca de 1 = no hay líneas de texto claras en esa zona."""
+    import numpy as np
+    from PIL import Image
+    sm = gray.resize((700, max(1, int(gray.height * 700 / max(gray.width, 1)))))
+    a = np.asarray(sm)
+    if a.size == 0 or float(a.max()) - float(a.min()) < 40:
+        return 0.0, 1.0
+    bw = Image.fromarray(((a < _otsu(a)) * 255).astype(np.uint8))
+
+    def score(ang: float) -> float:
+        prof = np.asarray(bw.rotate(float(ang), resample=Image.BILINEAR, fillcolor=0), dtype=np.float32).sum(axis=1)
+        return float(np.sum(np.diff(prof) ** 2))
+    coarse = {float(x): score(x) for x in np.arange(-rng, rng + 1e-6, 1.0)}
+    best = max(coarse, key=coarse.get)
+    fine = {float(x): score(x) for x in np.arange(best - 1.0, best + 1.0 + 1e-6, 0.2)}
+    best = max(fine, key=fine.get)
+    mean = float(np.mean(list(coarse.values()))) or 1.0
+    return best, max(fine.values()) / mean
+
+
 def _runs_mask(dark, length: int, axis: int):
     """Máscara de los píxeles que forman parte de un tramo recto oscuro de al menos `length` píxeles."""
     import numpy as np
@@ -798,8 +861,9 @@ def _find_rules(gray):
     a = np.asarray(gray)
     dark = a < min(_otsu(a), 140)
     hgt, wid = dark.shape
-    mh = _runs_mask(dark, max(60, int(wid * 0.08)), 1)
-    mv = _runs_mask(dark, max(60, int(hgt * 0.05)), 0)
+    band = _text_band_height(gray)                                  # una raya es mucho más larga que una palabra
+    mh = _runs_mask(dark, max(60, int(wid * 0.08), int(12 * band)), 1)
+    mv = _runs_mask(dark, max(60, int(hgt * 0.05), int(12 * band)), 0)
 
     def bands(mask, along_rows: bool):
         prof = mask.sum(axis=1 if along_rows else 0)
@@ -832,6 +896,13 @@ def _find_rules(gray):
             runs.append((a0, pv))
             for r0, r1 in runs:
                 if r1 - r0 >= (mask.shape[1] if along_rows else mask.shape[0]) * 0.08:
+                    # una raya de verdad está aislada: si por encima y por debajo hay tinta (letras), es una línea de texto
+                    if along_rows:
+                        side_a, side_b = dark[max(0, s - 3):s, int(r0):int(r1) + 1], dark[e + 1:e + 4, int(r0):int(r1) + 1]
+                    else:
+                        side_a, side_b = dark[int(r0):int(r1) + 1, max(0, s - 3):s], dark[int(r0):int(r1) + 1, e + 1:e + 4]
+                    if (side_a.size and side_b.size and side_a.mean() > 0.35 and side_b.mean() > 0.35):
+                        continue
                     lines.append(((s + e) / 2.0, float(r0), float(r1)))
         return lines
     h_lines = bands(mh, True)
@@ -849,6 +920,28 @@ def _find_rules(gray):
     return h_lines, v_lines, clear
 
 
+def _text_band_height(gray) -> float:
+    """Alto típico (en píxeles) de una línea de texto: mediana de las franjas de filas con tinta. 0 si no se distingue."""
+    import numpy as np
+    a = np.asarray(gray)
+    dark = a < _otsu(a)
+    prof = dark.sum(axis=1).astype(np.float32)
+    if prof.max() <= 0:
+        return 0.0
+    rows = prof > 0.12 * prof.max()
+    runs, n = [], 0
+    for r in rows:
+        if r:
+            n += 1
+        elif n:
+            runs.append(n)
+            n = 0
+    if n:
+        runs.append(n)
+    runs = [r for r in runs if r >= 3]                      # las rayas finas (subrayados, líneas de tabla) no cuentan
+    return float(np.median(runs)) if runs else 0.0
+
+
 def prepare_image(pix, enhance: bool = True, dpi: int = 200) -> dict:
     """Imagen lista para el OCR y lo necesario para volver a las coordenadas de la página:
     {"img", "w", "h" (tamaño tras enderezar), "angle", "factor", "h_lines", "v_lines", "noise", "mode"}."""
@@ -856,18 +949,24 @@ def prepare_image(pix, enhance: bool = True, dpi: int = 200) -> dict:
     from PIL import Image, ImageFilter, ImageOps
     im = _pil_from_pix(pix)
     gray = ImageOps.autocontrast(im.convert("L"), cutoff=1)
+    band = _text_band_height(gray)
+    pre = 1.0
+    if 0 < band < 24:                                          # letra muy pequeña (foto de poca resolución): se agranda
+        pre = min(4.0, 30.0 / band)                            # antes de limpiar, para que el filtrado no se coma los trazos
+        gray = gray.resize((int(gray.width * pre), int(gray.height * pre)), Image.LANCZOS)
+        gray = gray.filter(ImageFilter.GaussianBlur(pre * 0.35))   # suaviza los escalones de las letras agrandadas
     mode, factor, angle = "original", 1.0, 0.0
     noise = speck = 0.0
     if enhance:
         noise, speck = _noise_level(gray)
         if noise >= 27 or speck >= 0.04:
             gray = gray.filter(ImageFilter.MedianFilter(3)).filter(ImageFilter.GaussianBlur(1.0))
-            mode, factor = "ruido alto", 2.0
+            mode, factor = "ruido alto", (2.0 if pre == 1.0 else 1.0)
         elif noise >= 3:
             gray = gray.filter(ImageFilter.MedianFilter(3))
-            mode, factor = "ruido medio", 1.5
+            mode, factor = "ruido medio", (1.5 if pre == 1.0 else 1.0)
         else:
-            mode, factor = "limpia", (300.0 / dpi if dpi < 200 else 1.0)
+            mode, factor = "limpia", (300.0 / dpi if (dpi < 200 and pre == 1.0) else 1.0)
         angle = _deskew_angle(gray)
         if angle:
             gray = gray.rotate(angle, resample=Image.BICUBIC, fillcolor=255)
@@ -963,28 +1062,105 @@ def render_dpi_for(page, dpi: int) -> int:
     return int(max(100, min(nat, cap)))
 
 
-def ocr_page_words(page, languages: list, dpi: int = 200, enhance: bool = True, folder: str = "") -> dict:
+# ── Motor RapidOCR (redes neuronales, local y gratuito): mejor que Tesseract en fotos y baja calidad ──
+_RAPID = None
+
+
+def rapid_available() -> bool:
+    try:
+        import rapidocr  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _rapid_engine():
+    global _RAPID
+    if _RAPID is None:
+        from rapidocr import RapidOCR
+        _RAPID = RapidOCR()
+    return _RAPID
+
+
+def _prepare_rapid(pix, enhance: bool) -> dict:
+    """Imagen para RapidOCR y lo necesario para volver a las coordenadas de la página (igual que prepare_image): gira la
+    página hasta que el texto quede recto y agranda si la letra es diminuta. No limpia ni borra rayas (la red lo tolera)."""
+    from PIL import Image, ImageOps
+    im = _pil_from_pix(pix)
+    w, h = im.size
+    gray = ImageOps.autocontrast(im.convert("L"), cutoff=1)
+    angle = 0.0
+    if enhance:
+        angle = _deskew_angle(gray)
+        if angle:
+            im = im.rotate(angle, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
+            gray = gray.rotate(angle, resample=Image.BICUBIC, fillcolor=255)
+    h_lines, v_lines, _clear = _find_rules(gray) if enhance else ([], [], None)
+    factor = 1.0                                               # RapidOCR ya redimensiona por su cuenta: agrandar no ayuda
+    return {"img": im, "w": w, "h": h, "angle": angle, "factor": factor, "h_lines": h_lines, "v_lines": v_lines,
+            "noise": 0.0, "mode": "rapidocr"}
+
+
+def _rapid_words(prep: dict) -> list:
+    """Palabras [(x0, y0, x1, y1, texto)] en el espacio (w, h) de la imagen enderezada. RapidOCR da líneas con su caja:
+    cada línea se reparte entre sus palabras en proporción a su número de caracteres."""
+    import numpy as np
+    res = _rapid_engine()(np.ascontiguousarray(np.asarray(prep["img"].convert("RGB"))[:, :, ::-1]))   # BGR, como OpenCV
+    boxes = getattr(res, "boxes", None)
+    txts = getattr(res, "txts", None)
+    if boxes is None or not txts:
+        return []
+    f = prep["factor"]
+    out = []
+    for box, txt in zip(boxes, txts):
+        xs = [float(p[0]) / f for p in box]
+        ys = [float(p[1]) / f for p in box]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        parts = str(txt).split()
+        if not parts:
+            continue
+        total = sum(len(s) for s in parts) + (len(parts) - 1)
+        cur = x0
+        for s in parts:
+            wpx = (x1 - x0) * len(s) / total
+            out.append((cur, y0, cur + wpx, y1, s))
+            cur += wpx + (x1 - x0) / total
+    return out
+
+
+def ocr_page_words(page, languages: list, dpi: int = 200, enhance: bool = True, folder: str = "",
+                   engine: str = "tesseract") -> dict:
     """OCR de una página sin modificarla: palabras, bloques de maquetación y cómo se ha preparado la imagen."""
     import layout_tools as lt
     dpi = render_dpi_for(page, dpi)
-    pix = page.get_pixmap(dpi=dpi)
-    prep = prepare_image(pix, enhance, dpi)
-    words = _ocr_layer(prep, "+".join(languages), folder)
+    if engine == "rapid" and rapid_available():
+        nat = native_dpi(page)                                 # a la resolución real de la imagen: sin reescalar píxeles
+        pix = page.get_pixmap(dpi=int(round(nat)) if nat > 0 else dpi)
+        prep = _prepare_rapid(pix, enhance)
+        words = _rapid_words(prep)
+    else:
+        pix = page.get_pixmap(dpi=dpi)
+        prep = prepare_image(pix, enhance, dpi)
+        words = _ocr_layer(prep, "+".join(languages), folder)
     blocks = lt.analyze(words, prep["h_lines"], prep["v_lines"])
     return {"prep": prep, "words": words, "blocks": blocks}
 
 
 def ocr(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, password: str = "",
-        progress=None, enhance: bool = True) -> dict:
+        progress=None, enhance: bool = True, precise: bool = False, engine: str = "tesseract",
+        review: bool = False) -> dict:
     """Añade una capa de texto invisible a las páginas escaneadas: la página original NO se toca (misma imagen,
     mismo peso), pero pasa a poder buscarse y copiarse, con el texto en orden de lectura (columnas separadas,
     tablas por filas, párrafos). `enhance` prepara la imagen (ruido, inclinación, líneas de tabla) antes de leer.
-    `languages` p. ej. ['spa', 'eng']. progress(i, n) opcional."""
+    `languages` p. ej. ['spa', 'eng']. progress(i, n) opcional.
+    Con `review` no se escribe nada: se devuelve el texto leído de cada página (por líneas y con su posición) para que
+    la persona lo revise y lo corrija; después `ocr_apply` guarda el resultado."""
+    use_rapid = engine == "rapid" and rapid_available()
     avail = available_languages()
     missing = [l for l in languages if l not in avail]
-    if not languages or missing:
+    if not use_rapid and (not languages or missing):
         raise ToolError("Faltan los datos del idioma: " + ", ".join(LANG_NAMES.get(l, l) for l in (missing or ["?"])))
-    folder = _ascii_tessdata(languages, avail)
+    folder = "" if use_rapid else _ascii_tessdata(languages, avail, precise)
     doc = _open(path, password)
     try:
         pages = ocr_needed_pages(doc) if only_scanned else list(range(len(doc)))
@@ -993,20 +1169,33 @@ def ocr(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, p
         import layout_tools as lt
         fontfile = _text_font()
         n_words = n_tables = 0
+        pages_data, rotated = [], []
         for k, i in enumerate(pages):
             if progress:
                 progress(k, len(pages))
             page = doc[i]
-            if page.rotation:                                     # página girada: se reemplaza por su versión con texto
+            if page.rotation and not use_rapid:                   # página girada: se reemplaza por su versión con texto
+                if review:
+                    rotated.append(i)
+                    continue
                 _ocr_replace_page(doc, i, "+".join(languages), folder, dpi)
                 n_words += len(doc[i].get_text().split())
                 continue
-            res = ocr_page_words(page, languages, dpi, enhance, folder)
+            res = ocr_page_words(page, languages, dpi, enhance, folder, "rapid" if use_rapid else "tesseract")
             prep = res["prep"]
             ordered = [(*_page_rect_of(prep, page.rect, w), w[4]) for w in lt.ordered_words(res["blocks"])]
-            _write_invisible_text(page, ordered, fontfile)
             n_words += len(ordered)
             n_tables += sum(1 for b in res["blocks"] if b.kind == "table")
+            if review:
+                pages_data.append(_review_page(i, page, res))
+                continue
+            _write_invisible_text(page, ordered, fontfile)
+        if review:
+            if progress:
+                progress(len(pages), len(pages))
+            return {"review": True, "src": path, "password": password, "pages": pages_data, "rotated": rotated,
+                    "languages": list(languages), "precise": precise, "dpi": dpi, "words": n_words,
+                    "tables": n_tables, "n_pages": len(pages)}
         try:
             doc.subset_fonts()
         except Exception:
@@ -1018,6 +1207,224 @@ def ocr(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, p
     if progress:
         progress(len(pages), len(pages))
     return {"out": str(dest), "pages": len(pages), "words": n_words, "tables": n_tables}
+
+
+# ── Revisión del texto reconocido ───────────────────────────────────────
+def _group_lines(words: list) -> list:
+    """Palabras en orden de lectura → líneas [{"words", "bbox", "text"}] (misma altura, avanzando hacia la derecha)."""
+    lines: list = []
+    for w in words:
+        if lines:
+            cur = lines[-1]
+            ov = min(cur["y1"], w[3]) - max(cur["y0"], w[1])
+            h = min(cur["y1"] - cur["y0"], w[3] - w[1])
+            if h > 0 and ov > 0.5 * h and w[0] > cur["words"][-1][0] - 0.3 * h:
+                cur["words"].append(w)
+                cur["y0"], cur["y1"] = min(cur["y0"], w[1]), max(cur["y1"], w[3])
+                continue
+        lines.append({"words": [w], "y0": w[1], "y1": w[3]})
+    out = []
+    for ln in lines:
+        ws = ln["words"]
+        out.append({"words": ws, "text": " ".join(str(w[4]) for w in ws),
+                    "bbox": (min(w[0] for w in ws), ln["y0"], max(w[2] for w in ws), ln["y1"])})
+    return out
+
+
+def _review_page(i: int, page, res: dict) -> dict:
+    """Lo leído en una página, en puntos de página: líneas (con su bloque), rayas de tabla y tamaño."""
+    prep = res["prep"]
+    lines = []
+    for bi, b in enumerate(res["blocks"]):
+        ws = [(*_page_rect_of(prep, page.rect, w), w[4]) for w in b.ordered if str(w[4]).strip()]
+        for ln in _group_lines(ws):
+            ln["block"] = bi
+            lines.append(ln)
+    rules = []
+    for y, x0, x1 in prep.get("h_lines", []):
+        rules.append(_page_rect_of(prep, page.rect, (x0, y, x1, y)))
+    for x, y0, y1 in prep.get("v_lines", []):
+        rules.append(_page_rect_of(prep, page.rect, (x, y0, x, y1)))
+    r = page.rect
+    return {"index": i, "rect": (r.x0, r.y0, r.x1, r.y1), "lines": lines, "rules": rules}
+
+
+def review_text(pd: dict) -> str:
+    """Texto de una página para editarlo: una línea por renglón y una línea en blanco entre bloques."""
+    out, prev = [], None
+    for ln in pd["lines"]:
+        if prev is not None and ln.get("block") != prev:
+            out.append("")
+        out.append(ln["text"])
+        prev = ln.get("block")
+    return "\n".join(out)
+
+
+def align_lines(old: list, new: list) -> list:
+    """Empareja las líneas antiguas con las editadas: [(i_antigua | None, j_nueva | None)] en orden."""
+    import difflib
+    res = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag == "equal":
+            res += [(i1 + k, j1 + k) for k in range(i2 - i1)]
+        elif tag == "replace":
+            n = min(i2 - i1, j2 - j1)
+            res += [(i1 + k, j1 + k) for k in range(n)]
+            res += [(i1 + k, None) for k in range(n, i2 - i1)]
+            res += [(None, j1 + k) for k in range(n, j2 - j1)]
+        elif tag == "delete":
+            res += [(i, None) for i in range(i1, i2)]
+        else:
+            res += [(None, j) for j in range(j1, j2)]
+    return res
+
+
+def _line_words(bbox: tuple, old_words: list, text: str) -> list:
+    """Reparte el texto corregido de una línea en palabras con caja. Si hay las mismas palabras que antes, cada una
+    conserva su sitio; si no, se reparten a lo ancho de la línea en proporción a su longitud."""
+    parts = text.split()
+    if not parts:
+        return []
+    if len(parts) == len(old_words):
+        return [(*w[:4], s) for w, s in zip(old_words, parts)]
+    x0, y0, x1, y1 = bbox
+    total = sum(len(s) for s in parts) + len(parts) - 1
+    cur, out = x0, []
+    for s in parts:
+        wpx = (x1 - x0) * len(s) / total
+        out.append((cur, y0, cur + wpx, y1, s))
+        cur += wpx + (x1 - x0) / total
+    return out
+
+
+def edited_lines(pd: dict, new_text: str) -> list:
+    """Líneas finales de una página tras la corrección de la persona (con posición): las que no cambian se quedan donde
+    estaban, las corregidas conservan su sitio y las nuevas se colocan bajo la anterior."""
+    old = pd["lines"]
+    new = [s.strip() for s in new_text.split("\n") if s.strip()]
+    x0p, y0p, x1p, y1p = pd["rect"]
+    out, prev = [], None
+    for oi, nj in align_lines([l["text"] for l in old], new):
+        if nj is None:
+            continue
+        if oi is not None:
+            ln = old[oi]
+            ln = {"bbox": ln["bbox"], "text": new[nj], "block": ln.get("block", 0),
+                  "words": _line_words(ln["bbox"], ln["words"], new[nj]) if new[nj] != ln["text"] else ln["words"]}
+        else:
+            if prev is not None:
+                a, b, c, d = prev["bbox"]
+                h = max(d - b, 8.0)
+                box = (a, min(d, y1p - h), a + max((c - a) * len(new[nj]) / max(1, len(prev["text"])), 20.0),
+                       min(d + h, y1p))
+                blk = prev["block"]
+            else:
+                box, blk = (x0p + 36, y0p + 36, x1p - 36, y0p + 48), 0
+            ln = {"bbox": box, "text": new[nj], "block": blk, "words": _line_words(box, [], new[nj])}
+        out.append(ln)
+        prev = ln
+    return out
+
+
+def _draw_page_text(newp, lines: list, rules: list, fontfile):
+    """Dibuja a la vista el texto de las líneas (cada palabra en su caja) y las rayas de las tablas."""
+    for x0, y0, x1, y1 in rules:
+        newp.draw_line((x0, y0), (x1, y1), color=(0.45, 0.45, 0.45), width=0.6)
+    if fontfile:
+        newp.insert_font(fontname="ocrdraw", fontfile=fontfile)
+        font = fitz.Font(fontfile=fontfile)
+        fname = "ocrdraw"
+    else:
+        font, fname = fitz.Font("helv"), "helv"
+    helv = fitz.Font("helv")
+    for ln in lines:
+        words = ln["words"]
+        if not words:
+            continue
+        bh = max(w[3] - w[1] for w in words)
+        cap = max(4.0, bh * 0.85)
+        base = ln["bbox"][3] - bh * 0.2
+        runs, cur = [], [words[0]]                       # tramos de texto continuo (se separan en huecos grandes: columnas)
+        for prev, w in zip(words, words[1:]):
+            if w[0] - prev[2] <= bh * 0.9:
+                cur.append(w)
+            else:
+                runs.append(cur)
+                cur = [w]
+        runs.append(cur)
+        texts = [(r[0][0], r[-1][2], " ".join(str(w[4]) for w in r)) for r in runs]
+        latin = all(ord(c) < 256 for _a, _b, s in texts for c in s)      # Helvetica estándar: espacios normales al copiar
+        f_obj, f_name = (helv, "helv") if latin else (font, fname)
+        fs = cap                                         # un solo tamaño por línea: el que cabe en todos sus tramos
+        for x0, x1, s in texts:
+            tl = f_obj.text_length(s, fontsize=cap)
+            if tl > 0:
+                fs = min(fs, cap * (x1 - x0) / tl)
+        fs = max(cap * 0.5, fs)
+        for x0, x1, s in texts:
+            try:
+                newp.insert_text((x0, base), s, fontname=f_name, fontsize=fs, color=(0, 0, 0))
+            except Exception:
+                pass
+
+
+def ocr_apply(review: dict, texts: dict, searchable: bool = True, redrawn: bool = False, progress=None) -> dict:
+    """Guarda lo revisado. `texts` = {índice de página: texto corregido}. `searchable`: el PDF de siempre con la imagen y
+    el texto (corregido) invisible detrás. `redrawn`: PDF nuevo en el que el texto se dibuja a la vista, sin la imagen.
+    Devuelve {"out": ruta del primero, "outs": [rutas], "pages", "words"}."""
+    src = review["src"]
+    doc = _open(src, review.get("password", ""))
+    outs, n_words = [], 0
+    final = {}
+    try:
+        for pd in review["pages"]:
+            final[pd["index"]] = edited_lines(pd, texts.get(pd["index"], review_text(pd)))
+        fontfile = _text_font()
+        total = len(final) + 1
+        if searchable:
+            if review["rotated"]:
+                avail = available_languages()
+                folder = _ascii_tessdata(review["languages"], avail, review.get("precise", False))
+                for i in review["rotated"]:
+                    _ocr_replace_page(doc, i, "+".join(review["languages"]), folder, review.get("dpi", 200))
+            for k, (i, lines) in enumerate(final.items()):
+                if progress:
+                    progress(k, total)
+                words = [w for ln in lines for w in ln["words"]]
+                _write_invisible_text(doc[i], words, fontfile)
+                n_words += len(words)
+            try:
+                doc.subset_fonts()
+            except Exception:
+                pass
+            dest = out_path(src, "_ocr")
+            doc.save(str(dest), garbage=4, deflate=True)
+            outs.append(str(dest))
+        else:
+            n_words = sum(len(ln["words"]) for ls in final.values() for ln in ls)
+        if redrawn:
+            new = fitz.open()
+            rules = {pd["index"]: pd["rules"] for pd in review["pages"]}
+            orig = _open(src, review.get("password", ""))
+            try:
+                for i in range(orig.page_count):
+                    if i in final:
+                        r = orig[i].rect
+                        np_ = new.new_page(width=r.width, height=r.height)
+                        _draw_page_text(np_, final[i], rules.get(i, []), fontfile)
+                    else:
+                        new.insert_pdf(orig, from_page=i, to_page=i)
+                dest2 = out_path(src, "_texto")
+                new.save(str(dest2), garbage=4, deflate=True)
+                outs.append(str(dest2))
+            finally:
+                orig.close()
+                new.close()
+    finally:
+        doc.close()
+    if progress:
+        progress(1, 1)
+    return {"out": outs[0], "outs": outs, "pages": len(final), "words": n_words}
 
 
 def _ocr_replace_page(doc, i: int, lang: str, folder: str, dpi: int):
@@ -1032,15 +1439,19 @@ def _ocr_replace_page(doc, i: int, lang: str, folder: str, dpi: int):
     doc.delete_page(i)
 
 
-def download_language(lang: str, timeout: int = 60, dest_dir: Path | None = None) -> Path:
-    """Descarga los datos de un idioma (tessdata_fast, de los autores de Tesseract) a la carpeta del usuario."""
+TESSDATA_BEST_URL = "https://github.com/tesseract-ocr/tessdata_best/raw/main/{lang}.traineddata"
+
+
+def download_language(lang: str, timeout: int = 60, dest_dir: Path | None = None, best: bool = False) -> Path:
+    """Descarga los datos de un idioma (tessdata_fast, o tessdata_best con `best`, de los autores de Tesseract) a la
+    carpeta del usuario."""
     import requests
     if lang not in LANG_NAMES:
         raise ToolError("Idioma no válido.")
-    dest_dir = Path(dest_dir) if dest_dir else user_tessdata_dir()
+    dest_dir = Path(dest_dir) if dest_dir else (best_tessdata_dir() if best else user_tessdata_dir())
     dest_dir.mkdir(parents=True, exist_ok=True)
     try:
-        r = requests.get(TESSDATA_FAST_URL.format(lang=lang), timeout=timeout,
+        r = requests.get((TESSDATA_BEST_URL if best else TESSDATA_FAST_URL).format(lang=lang), timeout=max(timeout, 180 if best else 0),
                          headers={"User-Agent": "PDFManager/1.0 (descarga de idioma pedida por el usuario)"})
         r.raise_for_status()
     except requests.RequestException as e:
@@ -1054,7 +1465,8 @@ def download_language(lang: str, timeout: int = 60, dest_dir: Path | None = None
 
 
 # ── Maquetación de una página para copiar zonas ──────────────────────────
-def page_layout(page, languages: list | None = None, dpi: int = 200, enhance: bool = True) -> dict:
+def page_layout(page, languages: list | None = None, dpi: int = 200, enhance: bool = True,
+                engine: str = "tesseract") -> dict:
     """Palabras, líneas y bloques de una página, listos para copiar zonas. Si la página tiene texto se usa tal cual;
     si es un escaneo se reconoce al momento (no se modifica el PDF). Todo queda en un mismo sistema de coordenadas
     ("espacio de análisis"), que para un escaneo girado es el de la imagen enderezada. Devuelve
@@ -1068,10 +1480,11 @@ def page_layout(page, languages: list | None = None, dpi: int = 200, enhance: bo
                 "angle": 0.0, "w": rect.width, "h": rect.height, "rect": rect}
     avail = available_languages()
     langs = [l for l in (languages or []) if l in avail] or [l for l in DEFAULT_LANGS if l in avail][:1]
-    if not langs:
+    use_rapid = engine == "rapid" and rapid_available()
+    if not langs and not use_rapid:
         raise ToolError("Esta página es una imagen y no hay ningún idioma de OCR instalado (Herramientas → OCR).")
-    folder = _ascii_tessdata(langs, avail)
-    res = ocr_page_words(page, langs, dpi, enhance, folder)
+    folder = "" if use_rapid else _ascii_tessdata(langs, avail)
+    res = ocr_page_words(page, langs, dpi, enhance, folder, "rapid" if use_rapid else "tesseract")
     prep = res["prep"]
     return {"words": res["words"], "h_lines": [(y / 1.0, x0, x1) for y, x0, x1 in prep["h_lines"]],
             "v_lines": prep["v_lines"], "blocks": res["blocks"], "ocr": True, "angle": prep["angle"],
@@ -1135,3 +1548,22 @@ def _to_cell(text: str):
     if m.group(1) == "-":
         num = -num
     return int(num) if num == int(num) and not m.group(4) else num
+
+
+def accepted_extensions() -> set:
+    """Todo lo que el programa sabe abrir al cargarlo: PDF y lo que se convierte a PDF."""
+    return {".pdf"} | set(supported_extensions())
+
+
+def convert_one(path: str, page_size: str = "Ajustar") -> str:
+    """Convierte UN archivo (foto, texto, HTML, Office…) a PDF y devuelve su ruta. Las fotos conservan su tamaño."""
+    ext = Path(path).suffix.lower()
+    if ext in IMAGE_EXT:
+        return images_to_pdf([path], page_size)
+    if ext in TEXT_EXT or ext in HTML_EXT or ext == ".md":
+        return text_to_pdf(path)
+    if ext in OFFICE_EXT:
+        return office_to_pdf(path)
+    if ext in NATIVE_EXT:
+        return native_to_pdf(path)
+    raise ToolError(f"No sé abrir archivos «{ext}».")
