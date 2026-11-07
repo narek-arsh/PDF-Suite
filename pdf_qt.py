@@ -8265,12 +8265,6 @@ class ToolsPage(QWidget):
         lp.addWidget(wrap2)
         lay.addWidget(self.ocr_lang_panel)
         r = QHBoxLayout()
-        r.addWidget(QLabel("Calidad"))
-        self.ocr_dpi = QComboBox()
-        for label, dpi in (("Rápida (150 ppp)", 150), ("Normal (200 ppp)", 200), ("Alta (300 ppp)", 300)):
-            self.ocr_dpi.addItem(label, dpi)
-        self.ocr_dpi.setCurrentIndex(1)
-        r.addWidget(self.ocr_dpi)
         self.ocr_only = QCheckBox("Solo las páginas sin texto"); self.ocr_only.setChecked(True)
         r.addWidget(self.ocr_only)
         self.ocr_enhance = QCheckBox("Mejorar la imagen antes de leer")
@@ -8421,7 +8415,7 @@ class ToolsPage(QWidget):
         if not langs and engine != "rapid":
             self._say("Marca al menos un idioma (o instala uno de la lista).", "error")
             return
-        dpi, only, pw = self.ocr_dpi.currentData(), self.ocr_only.isChecked(), self.pw_field.text()
+        dpi, only, pw = 300, self.ocr_only.isChecked(), self.pw_field.text()   # tope; cada página se lee a la resolución de su escaneo (ptl.render_dpi_for)
         enhance = self.ocr_enhance.isChecked()
         straighten, flatten = self.ocr_straighten.isChecked(), self.ocr_flatten.isChecked()
         manual = dict(self._ocr_manual)
