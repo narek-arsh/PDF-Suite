@@ -7511,12 +7511,14 @@ class CornerCanvas(QWidget):
             poly.lineTo(pt_)
         poly.closeSubpath()
         p.drawPath(poly)
-        p.setPen(QPen(QColor("#FFFFFF"), 1))                 # cruz «+» fina, con hueco en el centro
+        p.setCompositionMode(QPainter.CompositionMode_Difference)   # cruz en negativo: negra sobre claro, blanca sobre oscuro
+        p.setPen(QPen(QColor("#FFFFFF"), 1.5))                       # «+» fina, con hueco en el centro
         gap = 7
         p.drawLine(QPointF(lx - R, ly), QPointF(lx - gap, ly))
         p.drawLine(QPointF(lx + gap, ly), QPointF(lx + R, ly))
         p.drawLine(QPointF(lx, ly - R), QPointF(lx, ly - gap))
         p.drawLine(QPointF(lx, ly + gap), QPointF(lx, ly + R))
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
         p.restore()
         p.setBrush(Qt.NoBrush)
         p.setPen(QPen(QColor(ACCENT), 3))
