@@ -8267,11 +8267,6 @@ class ToolsPage(QWidget):
         r = QHBoxLayout()
         self.ocr_only = QCheckBox("Solo las páginas sin texto"); self.ocr_only.setChecked(True)
         r.addWidget(self.ocr_only)
-        self.ocr_enhance = QCheckBox("Mejorar la imagen antes de leer")
-        self.ocr_enhance.setChecked(True)
-        self.ocr_enhance.setToolTip("Quita el ruido, endereza la página (hasta ~15°) y borra las líneas de las tablas "
-                                    "para leer mejor. Tarda algo más por página.")
-        r.addWidget(self.ocr_enhance)
         self.ocr_precise = QCheckBox("Máxima precisión")
         self.ocr_precise.setToolTip("Usa datos de idioma de alta precisión (tessdata_best, unos 15 MB por idioma, se "
                                     "descargan una vez). Más lento, pero lee mucho mejor el texto borroso o de baja "
@@ -8285,7 +8280,7 @@ class ToolsPage(QWidget):
                                    "Desde ahí también puedes crear un PDF nuevo redibujado con el texto.")
         lay.addWidget(self.ocr_review)
         # ── Enderezar (opcional, dentro del mismo OCR)
-        self.ocr_straighten = QCheckBox("Enderezar las páginas antes (fotos o escaneos torcidos)")
+        self.ocr_straighten = QCheckBox("Enderezar y aclarar las páginas torcidas (fotos o escaneos)")
         self.ocr_straighten.setChecked(True)
         self.ocr_straighten.setToolTip("Busca solo el papel, corrige la perspectiva y gira la página hasta que las líneas "
                                        "de texto queden horizontales (se guía por la base de las letras). Las páginas que "
@@ -8294,9 +8289,6 @@ class ToolsPage(QWidget):
         self.ocr_str_box = QWidget()
         sr = QHBoxLayout(self.ocr_str_box)
         sr.setContentsMargins(24, 0, 0, 0)
-        self.ocr_flatten = QCheckBox("Aclarar el fondo y quitar sombras")
-        self.ocr_flatten.setChecked(True)
-        sr.addWidget(self.ocr_flatten)
         sr.addWidget(QLabel("Esquinas a mano, página:"))
         self.ocr_corner_page = QSpinBox()
         self.ocr_corner_page.setRange(1, 1)
@@ -8416,8 +8408,8 @@ class ToolsPage(QWidget):
             self._say("Marca al menos un idioma (o instala uno de la lista).", "error")
             return
         dpi, only, pw = 300, self.ocr_only.isChecked(), self.pw_field.text()   # tope; cada página se lee a la resolución de su escaneo (ptl.render_dpi_for)
-        enhance = self.ocr_enhance.isChecked()
-        straighten, flatten = self.ocr_straighten.isChecked(), self.ocr_flatten.isChecked()
+        enhance = True                      # siempre: quita ruido y líneas de tabla solo para leer mejor
+        straighten, flatten = self.ocr_straighten.isChecked(), True
         manual = dict(self._ocr_manual)
         precise = self.ocr_precise.isChecked()
         review = self.ocr_review.isChecked()
