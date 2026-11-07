@@ -641,50 +641,36 @@ class HomePage(QWidget):
         super().__init__()
         self.win = win
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(28, 24, 28, 24)
-        root.setSpacing(14)
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        header = QHBoxLayout()
-        badge = QLabel()
-        badge.setFixedSize(40, 40)
-        badge.setAlignment(Qt.AlignCenter)
-        logo_pix = provecto_logo_pixmap(40)
-        if logo_pix is not None:
-            badge.setPixmap(logo_pix)
-        else:
-            badge.setObjectName("Badge")
-            badge.setText("P")
-        add_shadow(badge, blur=16, dy=3, alpha=90)
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
-        title = QLabel("PDF Manager")
-        title.setObjectName("Header")
-        subtitle = QLabel("Travel Agent Edition")
-        subtitle.setObjectName("SubHeader")
-        title_col.addWidget(title)
-        title_col.addWidget(subtitle)
-        header.addWidget(badge)
-        header.addSpacing(10)
-        header.addLayout(title_col)
-        header.addStretch(1)
-        root.addLayout(header)
+        self.side = QFrame()
+        self.side.setObjectName("Card")
+        self.side.setFixedWidth(230)
+        self._build_sidebar()
+        root.addWidget(self.side)
+
+        main = QWidget()
+        root.addWidget(main, 1)
+        col = QVBoxLayout(main)
+        col.setContentsMargins(24, 20, 24, 20)
+        col.setSpacing(12)
 
         url_row = QHBoxLayout()
         self.url_field = QLineEdit()
-        self.url_field.setPlaceholderText("Pega un enlace a un PDF y pulsa Enter (o arrastra PDFs y fotos abajo)")
+        self.url_field.setPlaceholderText("Pega un enlace a un PDF y pulsa Enter (o arrastra archivos aquí)")
         self.url_field.returnPressed.connect(self._load_from_url)
-        attach_btn = _btn("", "clip")
-        attach_btn.setFixedWidth(44)
+        attach_btn = _btn("Añadir archivos", "clip")
         attach_btn.setToolTip("Subir PDFs o fotos desde el ordenador")
         attach_btn.clicked.connect(self._browse_files)
         url_row.addWidget(self.url_field, 1)
         url_row.addWidget(attach_btn)
-        root.addLayout(url_row)
+        col.addLayout(url_row)
 
-        hint = QLabel("Arrastra PDFs o fotos aquí · arrastra las tarjetas para ordenarlas antes de unirlas")
-        hint.setObjectName("Hint")
-        root.addWidget(hint)
+        self.hint = QLabel()
+        self.hint.setObjectName("Hint")
+        col.addWidget(self.hint)
 
         self.drop_area = DropArea(self._handle_files_dropped)
         self.file_list = FileListWidget(
@@ -693,8 +679,8 @@ class HomePage(QWidget):
             on_remove=self.win.remove_file_obj,
             on_open=self.win.open_in_viewer,
         )
-        root.addWidget(self.drop_area, 1)
-        root.addWidget(self.file_list, 1)
+        col.addWidget(self.drop_area, 1)
+        col.addWidget(self.file_list, 1)
 
         self.steps_bar = QFrame()
         self.steps_bar.setObjectName("Card")
@@ -718,13 +704,13 @@ class HomePage(QWidget):
         sb.addWidget(save_wf_btn)
         sb.addWidget(reset_btn)
         self.steps_bar.setVisible(False)
-        root.addWidget(self.steps_bar)
+        col.addWidget(self.steps_bar)
 
         self.action_bar = QFrame()
         self.action_bar.setObjectName("Card")
         add_shadow(self.action_bar)
         self._build_action_bar()
-        root.addWidget(self.action_bar)
+        col.addWidget(self.action_bar)
 
         self.refresh_file_list()
 
@@ -756,31 +742,79 @@ class HomePage(QWidget):
     def _handle_files_dropped(self, paths: list[str]):
         self.win.add_files_any(paths)
 
+    def _build_sidebar(self):
+        lay = QVBoxLayout(self.side)
+        lay.setContentsMargins(16, 18, 16, 16)
+        lay.setSpacing(4)
+
+        header = QHBoxLayout()
+        badge = QLabel()
+        badge.setFixedSize(36, 36)
+        badge.setAlignment(Qt.AlignCenter)
+        logo_pix = provecto_logo_pixmap(36)
+        if logo_pix is not None:
+            badge.setPixmap(logo_pix)
+        else:
+            badge.setObjectName("Badge")
+            badge.setText("P")
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
+        title = QLabel("PDF Manager")
+        title.setObjectName("Header")
+        subtitle = QLabel("Travel Agent Edition")
+        subtitle.setObjectName("SubHeader")
+        title_col.addWidget(title)
+        title_col.addWidget(subtitle)
+        header.addWidget(badge)
+        header.addSpacing(10)
+        header.addLayout(title_col)
+        header.addStretch(1)
+        lay.addLayout(header)
+        lay.addSpacing(14)
+
+        self.nav = QWidget()
+        nav = QVBoxLayout(self.nav)
+        nav.setContentsMargins(0, 0, 0, 0)
+        nav.setSpacing(4)
+        w = self.win
+
+        def group(text, items):
+            g = QLabel(text.upper())
+            g.setObjectName("Hint")
+            g.setContentsMargins(6, 10, 0, 2)
+            nav.addWidget(g)
+            for label, icon_name, slot in items:
+                b = _btn(label, icon_name, "Flat")
+                b.setStyleSheet("text-align:left;padding:8px 10px;")
+                b.clicked.connect(lambda _=False, s=slot: s())
+                nav.addWidget(b)
+
+        group("Combinar y dividir", [("Unir", "link", w.do_merge_standalone),
+                                     ("Dividir", "scissors", w.open_split_view),
+                                     ("Organizar páginas", "grid", w.open_organize_view)])
+        group("Editar", [("Editor", "pencil", w.open_edit_view),
+                         ("Metadatos", "info", w.open_metadata_view),
+                         ("Ajuste de imagen", "droplet", w.do_ajuste_standalone)])
+        group("Formato", [("Tamaño y márgenes", "resize", w.open_size_margins_view),
+                          ("Varias por hoja", "nup", w.open_nup_view)])
+        group("Más", [("Herramientas", "wrench", w.open_tools_view),
+                      ("Workflows", "bolt", w.open_workflows_view)])
+        lay.addWidget(self.nav)
+        lay.addStretch(1)
+
     def _build_action_bar(self):
-        lay = FlowLayout(self.action_bar, margin=0, hspacing=8, vspacing=8)
-        self.action_bar.setContentsMargins(14, 12, 14, 12)
-
-        def btn(text, icon_name, slot, primary=False):
-            b = _btn(text, icon_name, "Primary" if primary else None)
-            b.clicked.connect(slot)
-            lay.addWidget(b)
-            return b
-
-        btn("Merge", "link", self.win.do_merge_standalone, primary=True)
-        btn("Organize", "grid", lambda: self.win.open_organize_view())
-        btn("Ajuste", "droplet", self.win.do_ajuste_standalone)
-        btn("Edit", "pencil", lambda: self.win.open_edit_view())
-        btn("Metadata", "info", lambda: self.win.open_metadata_view())
-        btn("Split", "scissors", lambda: self.win.open_split_view())
-        btn("Tamaño", "resize", lambda: self.win.open_size_margins_view())
-        btn("N-Up", "nup", lambda: self.win.open_nup_view())
-        btn("Herramientas", "wrench", lambda: self.win.open_tools_view())
-        btn("Workflows", "bolt", lambda: self.win.open_workflows_view())
-        btn("Guardar como…", "download", self.win.do_save_as_copy)
-
+        lay = QHBoxLayout(self.action_bar)
+        lay.setContentsMargins(14, 10, 14, 10)
         clear_btn = _btn("Limpiar todo", "trash", "Danger", icon_color=DANGER)
         clear_btn.clicked.connect(self.win.clear_all)
+        save_btn = _btn("Guardar como…", "download")
+        save_btn.clicked.connect(self.win.do_save_as_copy)
+        self.merge_btn = _btn("Unir", "link", "Primary")
+        self.merge_btn.clicked.connect(self.win.do_merge_standalone)
         lay.addWidget(clear_btn)
+        lay.addStretch(1)
+        lay.addWidget(save_btn)
+        lay.addWidget(self.merge_btn)
 
     def _browse_files(self):
         exts = " ".join("*" + e for e in sorted(ptl.accepted_extensions()))
@@ -814,6 +848,15 @@ class HomePage(QWidget):
         self.file_list.set_items(files)
         has_files = len(files) >= 1
         self.action_bar.setEnabled(has_files)
+        self.nav.setEnabled(has_files)
+        n = len(files)
+        pages = sum(f.get("pages", 0) for f in files)
+        self.hint.setText(
+            f"{n} archivo{'s' if n != 1 else ''} · {pages} página{'s' if pages != 1 else ''} · "
+            "arrastra las tarjetas para ordenarlas" if has_files
+            else "Arrastra archivos o pega un enlace para empezar")
+        self.merge_btn.setText(f"  Unir los {n} archivos" if n > 1 else "  Unir")
+        self.merge_btn.setEnabled(n > 1)
         self.drop_area.setVisible(not has_files)
         self.file_list.setVisible(has_files)
 
