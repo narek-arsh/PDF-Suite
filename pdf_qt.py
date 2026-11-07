@@ -8233,18 +8233,11 @@ class ToolsPage(QWidget):
                                "ya se puede buscar y copiar. Si la página es una foto torcida, puede enderezarla antes en "
                                "el mismo paso. Funciona sin internet; los idiomas son archivos pequeños que se "
                                "instalan una vez.")
-        lay.addWidget(QLabel("Idiomas del documento:"))
-        self.ocr_langs_box = QHBoxLayout()
-        wrap = QWidget(); wrap.setLayout(self.ocr_langs_box)
-        lay.addWidget(wrap)
-        self.ocr_missing_box = QHBoxLayout()
-        wrap2 = QWidget(); wrap2.setLayout(self.ocr_missing_box)
-        lay.addWidget(wrap2)
         er = QHBoxLayout()
         er.addWidget(QLabel("Motor"))
         self.ocr_engine = QComboBox()
-        self.ocr_engine.addItem("RapidOCR (mejor en fotos y baja calidad)", "rapid")
-        self.ocr_engine.addItem("Tesseract (rápido, escaneos limpios)", "tesseract")
+        self.ocr_engine.addItem("RapidOCR · recomendado", "rapid")
+        self.ocr_engine.addItem("Tesseract · rápido", "tesseract")
         if not ptl.rapid_available():
             self.ocr_engine.setCurrentIndex(1)
             self.ocr_engine.model().item(0).setEnabled(False)
@@ -8256,6 +8249,21 @@ class ToolsPage(QWidget):
         er.addWidget(self.ocr_engine)
         er.addStretch(1)
         lay.addLayout(er)
+        self.ocr_engine_note = QLabel()
+        self.ocr_engine_note.setObjectName("Hint")
+        self.ocr_engine_note.setWordWrap(True)
+        lay.addWidget(self.ocr_engine_note)
+        self.ocr_lang_panel = QWidget()
+        lp = QVBoxLayout(self.ocr_lang_panel)
+        lp.setContentsMargins(0, 0, 0, 0)
+        lp.addWidget(QLabel("Idiomas del documento:"))
+        self.ocr_langs_box = QHBoxLayout()
+        wrap = QWidget(); wrap.setLayout(self.ocr_langs_box)
+        lp.addWidget(wrap)
+        self.ocr_missing_box = QHBoxLayout()
+        wrap2 = QWidget(); wrap2.setLayout(self.ocr_missing_box)
+        lp.addWidget(wrap2)
+        lay.addWidget(self.ocr_lang_panel)
         r = QHBoxLayout()
         r.addWidget(QLabel("Calidad"))
         self.ocr_dpi = QComboBox()
@@ -8369,11 +8377,15 @@ class ToolsPage(QWidget):
     def _ocr_engine_changed(self, *_):
         """Idiomas y «Máxima precisión» solo cuentan con Tesseract; RapidOCR reconoce los idiomas con alfabeto latino solo."""
         rapid = self.ocr_engine.currentData() == "rapid"
-        self.ocr_precise.setEnabled(not rapid)
+        self.ocr_precise.setVisible(not rapid)
         if rapid:
             self.ocr_precise.setChecked(False)
-        for cb in self._ocr_checks.values():
-            cb.setEnabled(not rapid)
+        self.ocr_lang_panel.setVisible(not rapid)
+        self.ocr_engine_note.setText(
+            "Lee bien fotos, escaneos borrosos y papel torcido. Detecta solo el idioma (alfabeto latino): no hace falta "
+            "elegirlo. Es algo más lento." if rapid else
+            "Muy rápido y va bien con escaneos limpios y rectos. Elige abajo el idioma del documento; para fotos o "
+            "texto borroso usa RapidOCR.")
 
     def _ocr_mark_corners(self):
         """Marcar a mano las esquinas del papel de una página (si la detección automática no acierta)."""
