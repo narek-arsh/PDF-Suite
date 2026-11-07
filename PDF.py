@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Lanzador: abre la versión actual (PySide6) de PDF Manager.
-La versión antigua en Flet está en PDF_flet_antiguo.py."""
+"""Lanzador: abre la versión actual (PySide6) de PDF Manager."""
 import os
 import sys
 
