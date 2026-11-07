@@ -7407,9 +7407,14 @@ class PreviewPanel(QFrame):
 class CornerCanvas(QWidget):
     """Foto con cuatro puntos arrastrables en las esquinas del papel. Con «ver resultado» muestra la página ya estirada."""
     changed = Signal()
+    clicked = Signal()                                        # solo en modo no editable: pulsar abre el editor grande
 
     def __init__(self, image=None):
         super().__init__()
+        self.editable = True                                  # False: no se mueven los puntos, solo se pulsa
+        self.loupe = False                                    # True: al arrastrar un punto aparece una lupa con cruz
+        self._sel = None                                      # punto elegido (las flechas del teclado lo mueven)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.image = None                                     # PIL, ya reducida para la pantalla
         self.pix = QPixmap()
         self.corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)]      # fracciones: TL, TR, BR, BL
@@ -7471,11 +7476,64 @@ class CornerCanvas(QWidget):
         p.setPen(QPen(QColor(ACCENT), 2))
         p.drawPath(poly)
         for i, q in enumerate(pts):
-            p.setBrush(QColor("#FFFFFF"))
+            p.setBrush(QColor(ACCENT) if i == self._sel else QColor("#FFFFFF"))
             p.setPen(QPen(QColor(ACCENT), 2.5))
             p.drawEllipse(q, 9, 9)
             p.setPen(QColor("#1C1409"))
             p.drawText(QRectF(q.x() - 9, q.y() - 9, 18, 18), Qt.AlignCenter, str(i + 1))
+        if self.loupe and self._drag is not None:
+            self._paint_loupe(p, b)
+
+    def _paint_loupe(self, p: QPainter, b: QRectF):
+        """Círculo con zoom sobre el punto que se arrastra, con una cruz en el centro y los lados del recuadro."""
+        R, Z = 90.0, 4.0                                      # radio en pantalla y aumento sobre lo que se ve
+        fx, fy = self.corners[self._drag]
+        q = self._pt((fx, fy))
+        k = (b.width() / self.pix.width()) * Z                # píxeles de pantalla por píxel de la imagen, en la lupa
+        cx, cy = fx * self.pix.width(), fy * self.pix.height()
+        lx = q.x() + (R + 34 if q.x() < self.width() / 2 else -(R + 34))
+        ly = q.y() + (R + 34 if q.y() < 2 * R + 50 else -(R + 34))
+        lx = min(max(lx, R + 4), self.width() - R - 4)
+        ly = min(max(ly, R + 4), self.height() - R - 4)
+        circle = QPainterPath()
+        circle.addEllipse(QPointF(lx, ly), R, R)
+        p.save()
+        p.setClipPath(circle)
+        p.fillRect(QRectF(lx - R, ly - R, 2 * R, 2 * R), QColor("#141108"))
+        half = R / k
+        p.drawPixmap(QRectF(lx - R, ly - R, 2 * R, 2 * R), self.pix, QRectF(cx - half, cy - half, 2 * half, 2 * half))
+        pts = [QPointF(lx + (c[0] * self.pix.width() - cx) * k, ly + (c[1] * self.pix.height() - cy) * k)
+               for c in self.corners]
+        p.setPen(QPen(QColor(ACCENT), 1.5))
+        poly = QPainterPath()
+        poly.moveTo(pts[0])
+        for pt_ in pts[1:]:
+            poly.lineTo(pt_)
+        poly.closeSubpath()
+        p.drawPath(poly)
+        p.setPen(QPen(QColor("#FFFFFF"), 1))                 # cruz «+» fina, con hueco en el centro
+        gap = 7
+        p.drawLine(QPointF(lx - R, ly), QPointF(lx - gap, ly))
+        p.drawLine(QPointF(lx + gap, ly), QPointF(lx + R, ly))
+        p.drawLine(QPointF(lx, ly - R), QPointF(lx, ly - gap))
+        p.drawLine(QPointF(lx, ly + gap), QPointF(lx, ly + R))
+        p.restore()
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(ACCENT), 3))
+        p.drawEllipse(QPointF(lx, ly), R, R)
+
+    def keyPressEvent(self, e):
+        step = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0), Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}.get(e.key())
+        if step is None or self._sel is None or not self.editable or self.pix.isNull():
+            super().keyPressEvent(e)
+            return
+        n = 5 if e.modifiers() & Qt.ShiftModifier else 1      # píxeles reales de la imagen
+        x, y = self.corners[self._sel]
+        x = min(max(x + step[0] * n / self.pix.width(), 0.0), 1.0)
+        y = min(max(y + step[1] * n / self.pix.height(), 0.0), 1.0)
+        self.corners[self._sel] = (x, y)
+        self.update()
+        self.changed.emit()
 
     def _hit(self, pos):
         for i, c in enumerate(self.corners):
@@ -7485,11 +7543,19 @@ class CornerCanvas(QWidget):
         return None
 
     def mousePressEvent(self, e):
+        if not self.editable:
+            if e.button() == Qt.LeftButton:
+                self.clicked.emit()
+            return
         if self.preview is None and self.show_corners and not self.pix.isNull() and e.button() == Qt.LeftButton:
             self._drag = self._hit(e.position())
+            if self._drag is not None:
+                self._sel = self._drag
+            self.setFocus()
+            self.update()
 
     def mouseMoveEvent(self, e):
-        if self.preview is not None or not self.show_corners or self.pix.isNull():
+        if not self.editable or self.preview is not None or not self.show_corners or self.pix.isNull():
             return
         if self._drag is None:
             self.setCursor(Qt.PointingHandCursor if self._hit(e.position()) is not None else Qt.CrossCursor)
@@ -7503,6 +7569,65 @@ class CornerCanvas(QWidget):
 
     def mouseReleaseEvent(self, _e):
         self._drag = None
+        self.update()
+
+
+class CornerEditDialog(QDialog):
+    """Ventana grande para colocar las cuatro esquinas con precisión: lupa al arrastrar y flechas para afinar."""
+    def __init__(self, parent, image, corners, title: str):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        geo = (parent.screen() if parent is not None else QApplication.primaryScreen()).availableGeometry()
+        self.resize(int(geo.width() * 0.92), int(geo.height() * 0.92))
+        self.image = image
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 14, 18, 14)
+        lay.setSpacing(8)
+        head = QLabel(title)
+        head.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
+        lay.addWidget(head)
+        hint = QLabel("Arrastra cada punto a su esquina del papel: mientras arrastras aparece una lupa con una cruz «+». "
+                      "Para afinar, elige un punto y mueve con las flechas del teclado (1 píxel; con Mayús, 5).")
+        hint.setObjectName("Hint")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+        self.canvas = CornerCanvas(image)
+        self.canvas.loupe = True
+        self.canvas.setMinimumSize(600, 400)
+        self.canvas.corners = [tuple(c) for c in corners]
+        lay.addWidget(self.canvas, 1)
+        row = QHBoxLayout()
+        auto = _btn("Detectar de nuevo", "bolt", "Secondary", icon_color=TEXT)
+        auto.clicked.connect(self._auto)
+        full = _btn("Toda la página", "grid", "Secondary", icon_color=TEXT)
+        full.clicked.connect(lambda: self._set([(0.02, 0.02), (0.98, 0.02), (0.98, 0.98), (0.02, 0.98)]))
+        self.msg = QLabel("")
+        self.msg.setObjectName("Hint")
+        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
+        ok = _btn("Aplicar", "check", "Primary", icon_color=ICON_DARK)
+        cancel.clicked.connect(self.reject)
+        ok.clicked.connect(self.accept)
+        row.addWidget(auto)
+        row.addWidget(full)
+        row.addWidget(self.msg, 1)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
+
+    def _set(self, corners):
+        self.canvas.set_corners(corners)
+
+    def _auto(self):
+        det = pf.detect_corners(self.image)
+        if det:
+            w, h = self.image.size
+            self._set([(x / w, y / h) for x, y in det])
+            self.msg.setText("Esquinas detectadas: comprueba que cada punto está en su sitio.")
+        else:
+            self.msg.setText("No distingo el papel del fondo: colócalas a mano.")
+
+    def corners(self) -> list:
+        return [tuple(c) for c in self.canvas.corners]
 
 
 class PhotoFixDialog(QDialog):
@@ -7939,7 +8064,10 @@ class OcrPagesPanel(QWidget):
         top = QHBoxLayout()
         self.canvas = CornerCanvas()
         self.canvas.setMinimumSize(320, 300)
-        self.canvas.changed.connect(self._on_changed)
+        self.canvas.editable = False                          # los puntos se mueven en la ventana grande
+        self.canvas.setCursor(Qt.PointingHandCursor)
+        self.canvas.setToolTip("Pulsa para ajustar las esquinas en grande")
+        self.canvas.clicked.connect(self.open_big)
         top.addWidget(self.canvas, 3)
         side = QFrame()
         side.setObjectName("Card")
@@ -7953,10 +8081,11 @@ class OcrPagesPanel(QWidget):
         self.msg.setObjectName("Hint")
         self.msg.setWordWrap(True)
         sl.addWidget(self.msg)
-        for text, icon_name, slot in (("Detectar esta página", "bolt", self.detect_current),
-                                      ("Detectar todas", "bolt", self.detect_all),
-                                      ("Toda la página", "grid", self.full_page)):
-            b = _btn(text, icon_name)
+        for text, icon_name, slot, primary in (("Ajustar en grande…", "crop", self.open_big, True),
+                                               ("Detectar esta página", "bolt", self.detect_current, False),
+                                               ("Detectar todas", "bolt", self.detect_all, False),
+                                               ("Toda la página", "grid", self.full_page, False)):
+            b = _btn(text, icon_name, "Primary" if primary else None)
             b.clicked.connect(slot)
             sl.addWidget(b)
         self.view = QCheckBox("Ver resultado enderezado")
@@ -8089,9 +8218,9 @@ class OcrPagesPanel(QWidget):
         self.title.setText(f"Página {i + 1} de {len(self.pages)}")
         self.canvas.show_corners = state != "skip"
         self.msg.setText({
-            "auto": "Esquinas detectadas automáticamente. Arrastra los puntos si algo no encaja.",
+            "auto": "Esquinas detectadas automáticamente. Si algo no encaja, pulsa «Ajustar en grande…».",
             "manual": "Esquinas marcadas por ti. «Detectar esta página» vuelve a la detección automática.",
-            "none": "No distingo el papel del fondo. Arrastra los puntos a las esquinas para enderezarla, o déjala "
+            "none": "No distingo el papel del fondo. Pulsa «Ajustar en grande…» para marcar las esquinas, o déjala "
                     "así (solo se endereza el texto).",
             "skip": "Esta página ya tiene texto y se deja como está (desmarca «Solo las páginas sin texto» para "
                     "tratarla).",
@@ -8140,6 +8269,28 @@ class OcrPagesPanel(QWidget):
                 self._busy = False
             self._refresh_preview()
         self.refresh_all()
+
+    def open_big(self):
+        if not 0 <= self.sel < len(self.pages) or self._state(self.sel) == "skip":
+            return
+        f = self.tools._file()
+        try:
+            doc = ptl._open(f["path"], self.tools.pw_field.text())
+            try:
+                img = pf.render_page(doc, self.sel, 200, 2600)
+            finally:
+                doc.close()
+        except Exception:
+            return
+        st = self.pages[self.sel]
+        start = st["corners"] or [(0.12, 0.12), (0.88, 0.12), (0.88, 0.88), (0.12, 0.88)]
+        dlg = CornerEditDialog(self.window(), img, start, f"Esquinas · página {self.sel + 1}")
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new = dlg.corners()
+        moved = any(abs(a[0] - b[0]) + abs(a[1] - b[1]) > 1e-4 for a, b in zip(new, start))
+        if moved:
+            self._set_corners(new, "manual")
 
     def full_page(self):
         if 0 <= self.sel < len(self.pages):
