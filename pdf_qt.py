@@ -7408,20 +7408,31 @@ class CornerCanvas(QWidget):
     """Foto con cuatro puntos arrastrables en las esquinas del papel. Con «ver resultado» muestra la página ya estirada."""
     changed = Signal()
 
-    def __init__(self, image):
+    def __init__(self, image=None):
         super().__init__()
-        self.image = image                                    # PIL, ya reducida para la pantalla
-        self.pix = QPixmap.fromImage(QImage(image.tobytes(), image.width, image.height, image.width * 3,
-                                            QImage.Format_RGB888).copy())
+        self.image = None                                     # PIL, ya reducida para la pantalla
+        self.pix = QPixmap()
         self.corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)]      # fracciones: TL, TR, BR, BL
         self.preview = None                                   # QPixmap de la página corregida, si se está viendo
+        self.show_corners = True                              # False: solo la imagen, sin puntos ni arrastre
         self._drag = None
+        if image is not None:
+            self.set_image(image)
         self.setMinimumSize(520, 520)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
 
+    def set_image(self, image):
+        self.image = image
+        self.pix = QPixmap.fromImage(QImage(image.tobytes(), image.width, image.height, image.width * 3,
+                                            QImage.Format_RGB888).copy())
+        self.preview = None
+        self.update()
+
     def _box(self) -> QRectF:
         src = self.preview if self.preview is not None else self.pix
+        if src.isNull():
+            return QRectF()
         s = min((self.width() - 20) / src.width(), (self.height() - 20) / src.height())
         w, h = src.width() * s, src.height() * s
         return QRectF((self.width() - w) / 2, (self.height() - h) / 2, w, h)
@@ -7442,8 +7453,10 @@ class CornerCanvas(QWidget):
         p.fillRect(self.rect(), QColor("#141108"))
         b = self._box()
         src = self.preview if self.preview is not None else self.pix
+        if src.isNull():
+            return
         p.drawPixmap(b, src, QRectF(src.rect()))
-        if self.preview is not None:
+        if self.preview is not None or not self.show_corners:
             return
         pts = [self._pt(c) for c in self.corners]
         path = QPainterPath()
@@ -7472,11 +7485,11 @@ class CornerCanvas(QWidget):
         return None
 
     def mousePressEvent(self, e):
-        if self.preview is None and e.button() == Qt.LeftButton:
+        if self.preview is None and self.show_corners and not self.pix.isNull() and e.button() == Qt.LeftButton:
             self._drag = self._hit(e.position())
 
     def mouseMoveEvent(self, e):
-        if self.preview is not None:
+        if self.preview is not None or not self.show_corners or self.pix.isNull():
             return
         if self._drag is None:
             self.setCursor(Qt.PointingHandCursor if self._hit(e.position()) is not None else Qt.CrossCursor)
@@ -7807,6 +7820,352 @@ class OcrReviewDialog(QDialog):
         super().done(r)
 
 
+_OCR_STATES = {
+    "auto": ("Detectadas", ACCENT),
+    "manual": ("Manual", "#6C9BD1"),
+    "none": ("Sin detectar", DANGER),
+    "skip": ("Ya tiene texto · se omite", TEXT_SOFT),
+}
+
+
+class _PageLoader(QThread):
+    """Miniatura de cada página y esquinas del papel buscadas solas, sin bloquear la ventana."""
+    page_ready = Signal(int, object, object, bool)       # página, miniatura (QImage), esquinas (fracciones) o None, ¿tiene texto?
+
+    def __init__(self, path: str, password: str):
+        super().__init__()
+        self._path, self._pw = path, password
+        self._stop = False
+
+    def stop(self):
+        self._stop = True
+
+    def run(self):
+        import fitz as _fz
+        from PIL import Image
+        try:
+            doc = ptl._open(self._path, self._pw)
+        except Exception:
+            return
+        try:
+            for i in range(len(doc)):
+                if self._stop:
+                    return
+                page = doc[i]
+                has_text = len(page.get_text().strip()) >= 25
+                k = 640.0 / max(page.rect.width, page.rect.height)
+                pix = page.get_pixmap(matrix=_fz.Matrix(k, k), alpha=False)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+                try:
+                    det = pf.detect_corners(img)
+                except Exception:
+                    det = None
+                corners = [(x / img.width, y / img.height) for x, y in det] if det else None
+                img.thumbnail((300, 300))
+                qi = QImage(img.tobytes(), img.width, img.height, img.width * 3, QImage.Format_RGB888).copy()
+                self.page_ready.emit(i, qi, corners, has_text)
+        finally:
+            doc.close()
+
+
+class _PageThumb(QFrame):
+    clicked = Signal(int)
+
+    def __init__(self, idx: int):
+        super().__init__()
+        self.idx, self.pix, self.corners = idx, QPixmap(), None
+        self.state, self.selected = "none", False
+        self.setObjectName("Card")
+        self.setFixedSize(130, 190)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def set_data(self, pix, corners, state, selected):
+        self.pix, self.corners, self.state, self.selected = pix, corners, state, selected
+        self.update()
+
+    def mousePressEvent(self, _e):
+        self.clicked.emit(self.idx)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        label, color = _OCR_STATES[self.state]
+        box = QRectF(8, 8, 114, 134)
+        if not self.pix.isNull():
+            s = min(box.width() / self.pix.width(), box.height() / self.pix.height())
+            w, h = self.pix.width() * s, self.pix.height() * s
+            r = QRectF(box.x() + (box.width() - w) / 2, box.y() + (box.height() - h) / 2, w, h)
+            p.drawPixmap(r, self.pix, QRectF(self.pix.rect()))
+            if self.corners and self.state in ("auto", "manual"):
+                pts = [QPointF(r.x() + x * r.width(), r.y() + y * r.height()) for x, y in self.corners]
+                p.setPen(QPen(QColor(color), 2))
+                p.setBrush(Qt.NoBrush)
+                p.drawPolygon(pts)
+                p.setBrush(QColor("white"))
+                for pt_ in pts:
+                    p.drawEllipse(pt_, 3.5, 3.5)
+        f = p.font()
+        f.setBold(True)
+        p.setFont(f)
+        p.setPen(QColor(TEXT))
+        p.drawText(QRectF(8, 146, 114, 16), Qt.AlignLeft, f"Página {self.idx + 1}")
+        f.setBold(False)
+        f.setPointSize(max(7, f.pointSize() - 1))
+        p.setFont(f)
+        p.setPen(QColor(color))
+        p.drawText(QRectF(8, 164, 114, 16), Qt.AlignLeft, label)
+        if self.selected:
+            p.setPen(QPen(QColor(ACCENT), 3))
+            p.setBrush(Qt.NoBrush)
+            p.drawRoundedRect(QRectF(1.5, 1.5, 127, 187), 8, 8)
+
+
+class OcrPagesPanel(QWidget):
+    """Editor de esquinas del OCR: página grande arriba, tira con todas las páginas abajo y su estado."""
+    def __init__(self, tools: "ToolsPage"):
+        super().__init__()
+        self.tools = tools
+        self.pages: list[dict] = []
+        self.sel = -1
+        self._loader = None
+        self._key = None
+        self._busy = False                                    # True mientras el código mueve los puntos (no es un arrastre)
+        self.setMinimumHeight(540)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        top = QHBoxLayout()
+        self.canvas = CornerCanvas()
+        self.canvas.setMinimumSize(320, 300)
+        self.canvas.changed.connect(self._on_changed)
+        top.addWidget(self.canvas, 3)
+        side = QFrame()
+        side.setObjectName("Card")
+        side.setFixedWidth(230)
+        sl = QVBoxLayout(side)
+        sl.setContentsMargins(14, 14, 14, 14)
+        self.title = QLabel("")
+        self.title.setStyleSheet(f"font-weight:600; color:{TEXT};")
+        sl.addWidget(self.title)
+        self.msg = QLabel("")
+        self.msg.setObjectName("Hint")
+        self.msg.setWordWrap(True)
+        sl.addWidget(self.msg)
+        for text, icon_name, slot in (("Detectar esta página", "bolt", self.detect_current),
+                                      ("Detectar todas", "bolt", self.detect_all),
+                                      ("Toda la página", "grid", self.full_page)):
+            b = _btn(text, icon_name)
+            b.clicked.connect(slot)
+            sl.addWidget(b)
+        self.view = QCheckBox("Ver resultado enderezado")
+        self.view.toggled.connect(self._toggle_preview)
+        sl.addWidget(self.view)
+        sl.addStretch(1)
+        top.addWidget(side)
+        lay.addLayout(top, 1)
+
+        self.strip = QHBoxLayout()
+        self.strip.setSpacing(10)
+        self.strip.addStretch(1)
+        host = QWidget()
+        host.setLayout(self.strip)
+        sc = QScrollArea()
+        sc.setWidget(host)
+        sc.setWidgetResizable(True)
+        sc.setFixedHeight(214)
+        sc.setFrameShape(QFrame.NoFrame)
+        lay.addWidget(sc)
+        self.summary = QLabel("")
+        self.summary.setObjectName("Hint")
+        lay.addWidget(self.summary)
+
+    # ── carga ──────────────────────────────────────────────────────────
+    def load(self, f: dict | None, password: str = ""):
+        """Carga las páginas del archivo (una sola vez por archivo; se cancela la carga anterior)."""
+        key = (f["path"], f.get("pages")) if f and not f.get("locked") else None
+        if key == self._key:
+            return
+        self._key = key
+        if self._loader is not None:
+            self._loader.stop()
+            self._loader.page_ready.disconnect()
+            self._loader = None
+        while self.strip.count():
+            w = self.strip.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        self.strip.addStretch(1)
+        self.pages, self.sel = [], -1
+        self.canvas.pix = QPixmap()
+        self.canvas.image = None
+        self.canvas.preview = None
+        self.canvas.update()
+        self.title.setText("")
+        self.summary.setText("")
+        if key is None:
+            self.msg.setText("Este archivo no se puede previsualizar (tiene contraseña o no hay archivo).")
+            return
+        self.msg.setText("Cargando páginas…")
+        self._loader = _PageLoader(f["path"], password)
+        self._loader.page_ready.connect(self._on_page)
+        self._loader.start()
+
+    def _on_page(self, idx: int, qimg, corners, has_text: bool):
+        thumb = _PageThumb(idx)
+        thumb.clicked.connect(self.select)
+        self.strip.insertWidget(len(self.pages), thumb)
+        self.pages.append({"pix": QPixmap.fromImage(qimg), "auto": corners, "corners": corners,
+                           "src": "auto" if corners else "none", "has_text": has_text, "thumb": thumb})
+        self._refresh(idx)
+        if self.sel < 0:
+            self.select(0)
+        else:
+            self.title.setText(f"Página {self.sel + 1} de {len(self.pages)}")
+
+    # ── estado ─────────────────────────────────────────────────────────
+    def _state(self, i: int) -> str:
+        st = self.pages[i]
+        if st["has_text"] and self.tools.ocr_only.isChecked():
+            return "skip"
+        return st["src"]
+
+    def _refresh(self, i: int):
+        st = self.pages[i]
+        st["thumb"].set_data(st["pix"], st["corners"], self._state(i), i == self.sel)
+        self._summary()
+
+    def refresh_all(self):
+        for i in range(len(self.pages)):
+            self._refresh(i)
+        if 0 <= self.sel < len(self.pages):
+            self._show_message()
+
+    def _summary(self):
+        counts = {"auto": 0, "manual": 0, "none": 0, "skip": 0}
+        for i in range(len(self.pages)):
+            counts[self._state(i)] += 1
+        parts = [f"{counts['auto']} detectadas", f"{counts['manual']} manual"]
+        if counts["none"]:
+            parts.append(f"{counts['none']} sin detectar (solo se endereza el texto)")
+        if counts["skip"]:
+            parts.append(f"{counts['skip']} ya tienen texto (se omiten)")
+        self.summary.setText(" · ".join(parts))
+
+    def manual(self) -> dict:
+        """{página: esquinas} de las páginas marcadas a mano; el resto las busca solo el programa."""
+        return {i: [tuple(c) for c in st["corners"]] for i, st in enumerate(self.pages) if st["src"] == "manual"}
+
+    # ── página seleccionada ────────────────────────────────────────────
+    def select(self, i: int):
+        if not 0 <= i < len(self.pages):
+            return
+        old, self.sel = self.sel, i
+        if 0 <= old < len(self.pages):
+            self._refresh(old)
+        f = self.tools._file()
+        try:
+            doc = ptl._open(f["path"], self.tools.pw_field.text())
+            try:
+                img = pf.render_page(doc, i, 150, 1100)
+            finally:
+                doc.close()
+        except Exception:
+            return
+        self._busy = True
+        self.canvas.set_image(img)
+        st = self.pages[i]
+        self.canvas.corners = [tuple(c) for c in (st["corners"] or [(0.12, 0.12), (0.88, 0.12), (0.88, 0.88), (0.12, 0.88)])]
+        self._busy = False
+        self.view.setChecked(False)
+        self._refresh(i)
+        self._show_message()
+        self.canvas.update()
+
+    def _show_message(self):
+        i = self.sel
+        state = self._state(i)
+        self.title.setText(f"Página {i + 1} de {len(self.pages)}")
+        self.canvas.show_corners = state != "skip"
+        self.msg.setText({
+            "auto": "Esquinas detectadas automáticamente. Arrastra los puntos si algo no encaja.",
+            "manual": "Esquinas marcadas por ti. «Detectar esta página» vuelve a la detección automática.",
+            "none": "No distingo el papel del fondo. Arrastra los puntos a las esquinas para enderezarla, o déjala "
+                    "así (solo se endereza el texto).",
+            "skip": "Esta página ya tiene texto y se deja como está (desmarca «Solo las páginas sin texto» para "
+                    "tratarla).",
+        }[state])
+        self.canvas.update()
+
+    def _on_changed(self):
+        if self._busy or not 0 <= self.sel < len(self.pages):
+            return
+        st = self.pages[self.sel]
+        st["corners"] = [tuple(c) for c in self.canvas.corners]
+        st["src"] = "manual"
+        self._refresh(self.sel)
+        self._show_message()
+        self._refresh_preview()
+
+    def _set_corners(self, corners, src: str):
+        st = self.pages[self.sel]
+        st["corners"], st["src"] = corners, src
+        self._busy = True
+        if corners:
+            self.canvas.corners = [tuple(c) for c in corners]
+        self._busy = False
+        self._refresh(self.sel)
+        self._show_message()
+        self._refresh_preview()
+
+    # ── botones ────────────────────────────────────────────────────────
+    def detect_current(self):
+        if not 0 <= self.sel < len(self.pages) or self.canvas.image is None:
+            return
+        det = pf.detect_corners(self.canvas.image)
+        w, h = self.canvas.image.size
+        corners = [(x / w, y / h) for x, y in det] if det else None
+        self.pages[self.sel]["auto"] = corners
+        self._set_corners(corners, "auto" if corners else "none")
+
+    def detect_all(self):
+        for st in self.pages:
+            st["corners"], st["src"] = st["auto"], ("auto" if st["auto"] else "none")
+        if 0 <= self.sel < len(self.pages):
+            st = self.pages[self.sel]
+            if st["corners"]:
+                self._busy = True
+                self.canvas.corners = [tuple(c) for c in st["corners"]]
+                self._busy = False
+            self._refresh_preview()
+        self.refresh_all()
+
+    def full_page(self):
+        if 0 <= self.sel < len(self.pages):
+            self._set_corners([(0.02, 0.02), (0.98, 0.02), (0.98, 0.98), (0.02, 0.98)], "manual")
+
+    def _toggle_preview(self, on: bool):
+        self.canvas.preview = None
+        if on:
+            self._refresh_preview()
+        else:
+            self.canvas.update()
+
+    def _refresh_preview(self):
+        if not self.view.isChecked() or self.canvas.image is None:
+            return
+        img = self.canvas.image
+        quad = pf.order_corners([(x * img.width, y * img.height) for x, y in self.canvas.corners])
+        if not pf.is_convex(quad):
+            self.canvas.preview = None
+            return
+        flat = pf.flatten_light(pf.warp(img, quad, pf.target_size(quad, "auto", max_side=900)))
+        self.canvas.preview = QPixmap.fromImage(QImage(flat.tobytes(), flat.width, flat.height, flat.width * 3,
+                                                       QImage.Format_RGB888).copy())
+        self.canvas.update()
+
+
 class ToolsPage(QWidget):
     """Herramientas de archivo completo: comprimir, proteger, marca de agua, aplanar, reparar, convertir y OCR."""
     def __init__(self, win: "MainWindow"):
@@ -7890,8 +8249,8 @@ class ToolsPage(QWidget):
         except OSError:
             size = "?"
         self.info.setText(f"{size}" + (" · tiene contraseña de apertura" if f.get("locked") else f" · {f['pages']} pág."))
-        self.ocr_corner_page.setRange(1, max(1, f["pages"]))
         self.compress_now.setText(f"Peso actual: {size}")
+        self._load_ocr_panel()
 
     def _need_file(self):
         f = self._file()
@@ -8272,44 +8631,39 @@ class ToolsPage(QWidget):
                                     "descargan una vez). Más lento, pero lee mucho mejor el texto borroso o de baja "
                                     "resolución.")
         r.addWidget(self.ocr_precise)
-        r.addStretch(1)
-        lay.addLayout(r)
-        self.ocr_review = QCheckBox("Revisar y corregir el texto antes de guardar")
+        self.ocr_review = QCheckBox("Revisar el texto antes de guardar")
         self.ocr_review.setChecked(True)
         self.ocr_review.setToolTip("Tras leer, se abre una vista para comparar el texto con la página y corregirlo. "
                                    "Desde ahí también puedes crear un PDF nuevo redibujado con el texto.")
-        lay.addWidget(self.ocr_review)
+        r.addWidget(self.ocr_review)
         # ── Enderezar (opcional, dentro del mismo OCR)
-        self.ocr_straighten = QCheckBox("Enderezar y aclarar las páginas torcidas (fotos o escaneos)")
+        self.ocr_straighten = QCheckBox("Enderezar las páginas torcidas")
         self.ocr_straighten.setChecked(True)
         self.ocr_straighten.setToolTip("Busca solo el papel, corrige la perspectiva y gira la página hasta que las líneas "
                                        "de texto queden horizontales (se guía por la base de las letras). Las páginas que "
                                        "ya están rectas no se tocan. Sirve para papel plano: una hoja arrugada no se aplana.")
-        lay.addWidget(self.ocr_straighten)
-        self.ocr_str_box = QWidget()
-        sr = QHBoxLayout(self.ocr_str_box)
-        sr.setContentsMargins(24, 0, 0, 0)
-        sr.addWidget(QLabel("Esquinas a mano, página:"))
-        self.ocr_corner_page = QSpinBox()
-        self.ocr_corner_page.setRange(1, 1)
-        sr.addWidget(self.ocr_corner_page)
-        self.ocr_corner_btn = _btn("Marcar esquinas…", "crop", "Secondary", icon_color=TEXT)
-        self.ocr_corner_btn.setToolTip("Si no encuentra bien el papel, marca tú las cuatro esquinas de esa página")
-        self.ocr_corner_btn.clicked.connect(self._ocr_mark_corners)
-        sr.addWidget(self.ocr_corner_btn)
-        self.ocr_corner_lbl = QLabel("")
-        self.ocr_corner_lbl.setObjectName("Hint")
-        sr.addWidget(self.ocr_corner_lbl)
-        sr.addStretch(1)
-        lay.addWidget(self.ocr_str_box)
-        self.ocr_straighten.toggled.connect(self.ocr_str_box.setVisible)
-        self._ocr_manual: dict = {}
+        r.addWidget(self.ocr_straighten)
+        r.addStretch(1)
+        lay.addLayout(r)
+        self.ocr_panel = OcrPagesPanel(self)
+        lay.addWidget(self.ocr_panel, 1)
+        self.ocr_straighten.toggled.connect(self.ocr_panel.setVisible)
+        self.ocr_only.toggled.connect(lambda _on: self.ocr_panel.refresh_all())
+        self.tabs.currentChanged.connect(lambda _i: self._load_ocr_panel())
         b = _btn("Reconocer texto", "play", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_ocr)
         lay.addWidget(b, 0, Qt.AlignLeft)
-        lay.addStretch(1)
         self._ocr_checks: dict = {}
         self._ocr_engine_changed()
+        page = lay.parentWidget()                               # la pestaña entera se desplaza si la ventana es baja
+        idx = self.tabs.indexOf(page)
+        sc = QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        sc.setWidget(page)
+        self.tabs.removeTab(idx)
+        self.tabs.insertTab(idx, sc, "OCR")
 
     def _refresh_ocr_langs(self):
         for box in (self.ocr_langs_box, self.ocr_missing_box):
@@ -8373,30 +8727,10 @@ class ToolsPage(QWidget):
             "Muy rápido y va bien con escaneos limpios y rectos. Elige abajo el idioma del documento; para fotos o "
             "texto borroso usa RapidOCR.")
 
-    def _ocr_mark_corners(self):
-        """Marcar a mano las esquinas del papel de una página (si la detección automática no acierta)."""
-        f = self._need_file()
-        if not f:
-            return
-        if f.get("locked"):
-            self._say("Este PDF tiene contraseña: desbloquéalo primero.", "error")
-            return
-        idx = self.ocr_corner_page.value() - 1
-        try:
-            import fitz as _fz
-            doc = _fz.open(f["path"])
-            try:
-                img = pf.render_page(doc, idx, max_dpi=150, max_px=1500)
-            finally:
-                doc.close()
-        except Exception as e:
-            self._say(f"No se pudo abrir la página: {e}", "error")
-            return
-        dlg = PhotoFixDialog(self.window(), img)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        self._ocr_manual[idx] = dlg.result()["corners"]
-        self.ocr_corner_lbl.setText("Esquinas marcadas en página(s): " + ", ".join(str(i + 1) for i in sorted(self._ocr_manual)))
+    def _load_ocr_panel(self):
+        """Las miniaturas y la detección de esquinas solo se calculan cuando se abre la pestaña OCR."""
+        if self.tabs.tabText(self.tabs.currentIndex()) == "OCR":
+            self.ocr_panel.load(self._file(), self.pw_field.text())
 
     def _do_ocr(self):
         f = self._need_file()
@@ -8410,7 +8744,7 @@ class ToolsPage(QWidget):
         dpi, only, pw = 300, self.ocr_only.isChecked(), self.pw_field.text()   # tope; cada página se lee a la resolución de su escaneo (ptl.render_dpi_for)
         enhance = True                      # siempre: quita ruido y líneas de tabla solo para leer mejor
         straighten, flatten = self.ocr_straighten.isChecked(), True
-        manual = dict(self._ocr_manual)
+        manual = self.ocr_panel.manual() if straighten else {}
         precise = self.ocr_precise.isChecked()
         review = self.ocr_review.isChecked()
         missing_hq = [l for l in langs if not ptl.best_available(l)] if precise else []
