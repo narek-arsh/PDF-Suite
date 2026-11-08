@@ -33,6 +33,18 @@ def test_not_quantities_left_alone():
     assert fixed(["spa"], None, *texts)[0] == list(texts)
 
 
+def test_short_dates_times_and_sections_untouched():
+    texts = ("14.11", "5.12", "18.30", "2.15", "3.10", "11.2026", "14.11.2026", "1.12.2026")
+    out, info = fixed(["spa"], ("1.234,56", "245,60", "12.345,00", "99,90"), *texts)
+    assert out == list(texts) and not info
+
+
+def test_short_dates_do_not_vote():
+    f = NumberFixer([])
+    f.learn(words("14.11", "5.12", "18.30", "2.15"))
+    assert f.decimal_char() == (None, False)
+
+
 def test_single_separator_three_digits_is_flagged():
     out, info = fixed(["spa"], None, "1.234")
     assert out == ["1.234"] and list(info.values())[0][0] == "flag"

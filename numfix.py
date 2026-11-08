@@ -48,6 +48,18 @@ def parse(core: str):
     return ["th"] * (len(seps) - 1) + ["dec"], "alta"
 
 
+def ignorable(core: str) -> bool:
+    """Un solo separador que más parece fecha, hora, versión o apartado que una cantidad: 14.11, 18.30, 2.15, 11.2026.
+    Se deja tal cual (ni se corrige, ni se marca, ni vota): un 5.12 puede ser un importe o el 5 de diciembre."""
+    groups = _SEP.split(core)
+    if len(groups) != 2 or "" in groups:
+        return False
+    g0, g1 = groups
+    if len(g1) == 4 and 1900 <= int(g1) <= 2100:          # mes.año
+        return True
+    return len(g0) <= 2 and int(g0) <= 31 and len(g1) != 3   # día.mes, hora.minutos, apartados y versiones
+
+
 class NumberFixer:
     """Aprende el separador decimal del documento y corrige las cantidades mal leídas. Se usa página a página:
     `learn` con las palabras de la página y después `fix`."""
@@ -77,7 +89,7 @@ class NumberFixer:
                 continue
             core = parts[1]
             info = parse(core)
-            if not info:
+            if not info or ignorable(core):
                 continue
             roles, certainty = info
             seps = _SEP.findall(core)
@@ -107,7 +119,7 @@ class NumberFixer:
             text = str(w[4])
             parts = self._split(text)
             res = parse(parts[1]) if parts else None
-            if not res:
+            if not res or ignorable(parts[1]):
                 out.append(w)
                 continue
             pre, core, post = parts
