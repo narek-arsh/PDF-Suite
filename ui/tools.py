@@ -56,6 +56,148 @@ from ui.ocr import OcrPagesPanel, OcrReviewDialog
 from ui.widgets import BackHeader
 
 
+class ToolPreview(QFrame):
+    """Vista previa de la página del archivo elegido, con ‹ › para recorrerlas. Una herramienta puede ponerle un
+    «hook» que transforma la página antes de mostrarla (la marca de agua, por ejemplo)."""
+
+    def __init__(self):
+        super().__init__()
+        self.setObjectName("Card")
+        self._path, self._pw, self._n, self._i = "", "", 0, 0
+        self.hook = None                                      # hook(ruta de un PDF de 1 página, nº de página) -> ruta | None
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._render)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        nav = QHBoxLayout()
+        self.prev_b = _btn("‹", None, "Flat")
+        self.prev_b.setFixedWidth(34)
+        self.next_b = _btn("›", None, "Flat")
+        self.next_b.setFixedWidth(34)
+        self.prev_b.clicked.connect(lambda: self.goto(self._i - 1))
+        self.next_b.clicked.connect(lambda: self.goto(self._i + 1))
+        self.lbl = QLabel("")
+        self.lbl.setObjectName("Hint")
+        self.lbl.setAlignment(Qt.AlignCenter)
+        nav.addWidget(self.prev_b)
+        nav.addWidget(self.lbl, 1)
+        nav.addWidget(self.next_b)
+        lay.addLayout(nav)
+        self.view = QLabel("")
+        self.view.setAlignment(Qt.AlignCenter)
+        self.view.setMinimumSize(240, 300)
+        self.view.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        lay.addWidget(self.view, 1)
+
+    def set_file(self, f: dict | None, password: str = ""):
+        self._pw = password
+        if not f or f.get("locked") and not password:
+            self._path, self._n, self._i = "", 0, 0
+            self._clear("Sin vista previa" if not f else "🔒 Protegido con contraseña")
+            return
+        if f["path"] != self._path:
+            self._i = 0
+        self._path = f["path"]
+        try:
+            doc = ptl._open(self._path, self._pw)
+            self._n = len(doc)
+            doc.close()
+        except Exception:
+            self._n = 0
+            self._clear("No se puede mostrar este archivo")
+            return
+        self._i = min(self._i, max(0, self._n - 1))
+        self.refresh()
+
+    def _clear(self, text: str):
+        self.view.setPixmap(QPixmap())
+        self.view.setText(text)
+        self.lbl.setText("")
+        self.prev_b.setEnabled(False)
+        self.next_b.setEnabled(False)
+
+    def goto(self, i: int):
+        if 0 <= i < self._n:
+            self._i = i
+            self.refresh()
+
+    def refresh(self, delay: int = 0):
+        """Vuelve a dibujar la página (con un pequeño retraso se agrupan los cambios seguidos, p. ej. al escribir)."""
+        self._timer.start(delay)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        if self._path:
+            self.refresh(120)
+
+    def _render(self):
+        if not self._path or self._n == 0 or not self.isVisible():
+            return
+        import fitz as _fz
+        try:
+            doc = ptl._open(self._path, self._pw)
+            try:
+                page_doc, k, tmp = doc, self._i, None
+                if self.hook is not None:
+                    import tempfile
+                    one = _fz.open()
+                    one.insert_pdf(doc, from_page=self._i, to_page=self._i)
+                    tmp = os.path.join(tempfile.mkdtemp(prefix="pdfm_prev_"), "p.pdf")
+                    one.save(tmp)
+                    one.close()
+                    out = self.hook(tmp, self._i)
+                    if out:
+                        page_doc, k = ptl._open(out, ""), 0
+                    else:
+                        page_doc, k = ptl._open(tmp, ""), 0
+                page = page_doc[k]
+                z = min((self.view.width() - 8) / max(page.rect.width, 1), (self.view.height() - 8) / max(page.rect.height, 1))
+                z = max(0.2, min(z, 3.0))
+                pix = page.get_pixmap(matrix=_fz.Matrix(z, z), alpha=False)
+                qi = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
+                if page_doc is not doc:
+                    page_doc.close()
+            finally:
+                doc.close()
+        except Exception:
+            self._clear("No se puede mostrar la página")
+            return
+        self.view.setText("")
+        self.view.setPixmap(QPixmap.fromImage(qi))
+        self.lbl.setText(f"Página {self._i + 1} de {self._n}")
+        self.prev_b.setEnabled(self._i > 0)
+        self.next_b.setEnabled(self._i < self._n - 1)
+
+
+class _ConvList(QListWidget):
+    """Lista de archivos a convertir: acepta soltar archivos y muestra una ayuda mientras está vacía."""
+    def __init__(self, on_paths):
+        super().__init__()
+        self._on_paths = on_paths
+        self.setAcceptDrops(True)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setStyleSheet("QListWidget { border: 1px dashed #767A56; border-radius: 10px; }")
+
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls():
+            e.acceptProposedAction()
+
+    def dragMoveEvent(self, e):
+        e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        self._on_paths([u.toLocalFile() for u in e.mimeData().urls() if u.toLocalFile()])
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if self.count() == 0:
+            p = QPainter(self.viewport())
+            p.setPen(QColor(TEXT_SOFT))
+            p.drawText(self.viewport().rect(), Qt.AlignCenter, "Arrastra aquí los archivos a convertir\no pulsa «Añadir archivos…»")
+
+
 class ToolsPage(QWidget):
     """Herramientas de archivo completo: comprimir, proteger, marca de agua, aplanar, reparar, convertir y OCR."""
     def __init__(self, win: "MainWindow"):
@@ -64,9 +206,12 @@ class ToolsPage(QWidget):
         self._job = None
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.addWidget(BackHeader("Herramientas", lambda: win.go_home()))
+        self.back = BackHeader("Herramientas", lambda: win.go_home())
+        root.addWidget(self.back)
 
-        row = QHBoxLayout()
+        self.file_row = QWidget()
+        row = QHBoxLayout(self.file_row)
+        row.setContentsMargins(0, 0, 0, 0)
         row.addWidget(QLabel("Archivo:"))
         self.file_combo = QComboBox()
         self.file_combo.currentIndexChanged.connect(self._file_changed)
@@ -77,19 +222,27 @@ class ToolsPage(QWidget):
         self.pw_field.setPlaceholderText("solo si lo necesita")
         self.pw_field.setFixedWidth(170)
         row.addWidget(self.pw_field)
-        root.addLayout(row)
+        self.pw_field.editingFinished.connect(lambda: self.preview.set_file(self._file(), self.pw_field.text()))
+        root.addWidget(self.file_row)
         self.info = QLabel("")
         self.info.setObjectName("Hint")
         root.addWidget(self.info)
 
+        body = QHBoxLayout()
+        body.setSpacing(14)
         self.tabs = QTabWidget()
-        root.addWidget(self.tabs, 1)
+        self.tabs.tabBar().hide()                              # cada herramienta se elige en la barra lateral
+        body.addWidget(self.tabs, 3)
+        self.preview = ToolPreview()
+        body.addWidget(self.preview, 2)
+        root.addLayout(body, 1)
         self._build_compress()
         self._build_protect()
         self._build_watermark()
         self._build_fix()
         self._build_convert()
         self._build_ocr()
+        self._wm_timer_widgets()
 
         self.status = QLabel("")
         self.status.setWordWrap(True)
@@ -114,6 +267,22 @@ class ToolsPage(QWidget):
         self.tabs.addTab(w, title)
         return lay
 
+    TOOLS = ("Comprimir", "Proteger", "Marca de agua", "Aplanar y reparar", "Convertir a PDF", "OCR")
+    WITH_PREVIEW = ("Comprimir", "Proteger", "Marca de agua", "Aplanar y reparar")
+
+    def show_tool(self, name: str):
+        """Muestra una sola herramienta: título, opciones y, si la tiene, la vista previa del archivo."""
+        for i in range(self.tabs.count()):
+            if self.tabs.tabText(i) == name:
+                self.tabs.setCurrentIndex(i)
+        self.back.title_lbl.setText(name)
+        self.file_row.setVisible(name != "Convertir a PDF")
+        self.info.setVisible(name != "Convertir a PDF")
+        self.preview.setVisible(name in self.WITH_PREVIEW)
+        self.preview.hook = self._wm_hook if name == "Marca de agua" else None
+        self.populate()
+        self.preview.refresh()
+
     def populate(self):
         self.file_combo.blockSignals(True)
         self.file_combo.clear()
@@ -131,8 +300,8 @@ class ToolsPage(QWidget):
     def _file_changed(self, *_):
         f = self._file()
         if not f:
-            self.info.setText("Añade un PDF en la pantalla principal para usar estas herramientas (convertir a PDF "
-                              "no necesita ninguno).")
+            self.info.setText("Añade un PDF en la pantalla principal para usar esta herramienta.")
+            self.preview.set_file(None)
             return
         try:
             size = _human_size(os.path.getsize(f["path"]))
@@ -140,6 +309,7 @@ class ToolsPage(QWidget):
             size = "?"
         self.info.setText(f"{size}" + (" · tiene contraseña de apertura" if f.get("locked") else f" · {f['pages']} pág."))
         self.compress_now.setText(f"Peso actual: {size}")
+        self.preview.set_file(f, self.pw_field.text())
         self._load_ocr_panel()
 
     def _need_file(self):
@@ -357,6 +527,32 @@ class ToolsPage(QWidget):
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
 
+    def _wm_kwargs(self) -> dict:
+        use_img = self.wm_img_rb.isChecked()
+        return dict(text="" if use_img else self.wm_text.text(), image=self.wm_img_path.text() if use_img else "",
+                    opacity=self.wm_opacity.value() / 100, angle=float(self.wm_angle.value()),
+                    color=self.wm_color.currentText(), pages=self.wm_pages.text(), tile=self.wm_tile.isChecked(),
+                    password="")
+
+    def _wm_hook(self, tmp_path: str, page_idx: int):
+        """Pone la marca de agua en la página que se está viendo (si está entre las páginas elegidas)."""
+        f = self._file()
+        kw = self._wm_kwargs()
+        if f and page_idx not in ptl.parse_pages(kw["pages"], f.get("pages", 1)):
+            return None
+        kw["pages"] = ""
+        try:
+            return ptl.watermark(tmp_path, **kw)
+        except ptl.ToolError:
+            return None
+
+    def _wm_timer_widgets(self):
+        """Cualquier cambio en las opciones de la marca de agua redibuja la vista previa."""
+        for w, sig in ((self.wm_text, "textChanged"), (self.wm_img_path, "textChanged"), (self.wm_pages, "textChanged"),
+                       (self.wm_color, "currentIndexChanged"), (self.wm_opacity, "valueChanged"),
+                       (self.wm_angle, "valueChanged"), (self.wm_tile, "toggled"), (self.wm_text_rb, "toggled")):
+            getattr(w, sig).connect(lambda *_: self.preview.hook is not None and self.preview.refresh(250))
+
     def _wm_pick(self):
         p, _ = QFileDialog.getOpenFileName(self, "Imagen de la marca de agua", str(Path.home() / "Pictures"),
                                            "Imágenes (*.png *.jpg *.jpeg *.bmp *.webp)")
@@ -368,11 +564,8 @@ class ToolsPage(QWidget):
         f = self._need_file()
         if not f:
             return
-        use_img = self.wm_img_rb.isChecked()
-        kw = dict(text="" if use_img else self.wm_text.text(), image=self.wm_img_path.text() if use_img else "",
-                  opacity=self.wm_opacity.value() / 100, angle=float(self.wm_angle.value()),
-                  color=self.wm_color.currentText(), pages=self.wm_pages.text(), tile=self.wm_tile.isChecked(),
-                  password=self.pw_field.text())
+        kw = self._wm_kwargs()
+        kw["password"] = self.pw_field.text()
         self._run(lambda cb: ptl.watermark(f["path"], **kw),
                   lambda out: self._adopt(out, f, "Marca de agua añadida."), "Añadiendo marca de agua…")
 
@@ -427,7 +620,7 @@ class ToolsPage(QWidget):
         exts = " ".join(ptl.supported_extensions())
         lay = self._tab("Convertir a PDF", "Convierte imágenes, texto, Markdown, HTML y otros formatos a PDF. Word, "
                                            "Excel y PowerPoint necesitan LibreOffice instalado. Formatos: " + exts)
-        self.conv_list = QListWidget()
+        self.conv_list = _ConvList(self._conv_add_paths)
         self.conv_list.setMinimumHeight(120)
         lay.addWidget(self.conv_list, 1)
         r = QHBoxLayout()
@@ -449,6 +642,9 @@ class ToolsPage(QWidget):
     def _conv_add(self):
         flt = "Todos los compatibles (" + " ".join("*" + e for e in ptl.supported_extensions()) + ")"
         paths, _ = QFileDialog.getOpenFileNames(self, "Archivos a convertir", str(Path.home()), flt)
+        self._conv_add_paths(paths)
+
+    def _conv_add_paths(self, paths: list):
         existing = {self.conv_list.item(i).data(Qt.UserRole) for i in range(self.conv_list.count())}
         for p in paths:
             if p not in existing:

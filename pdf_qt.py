@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
             self.pick_page.show_for(self._pending[0], self._pending[2])
             self._pending_timer.start(500)
         if locked:
-            self.snack(f"🔒 {name} tiene contraseña: desbloquéalo en Herramientas → Proteger antes de usarlo.", "info")
+            self.snack(f"🔒 {name} tiene contraseña: desbloquéalo en Proteger antes de usarlo.", "info")
         else:
             self.snack(f"✓ {name} ({pages} pág.)")
 
@@ -399,7 +399,14 @@ class MainWindow(QMainWindow):
         return None
 
     def open_tools_view(self):
-        self.tools_page.populate()
+        self.open_tool("Comprimir")
+
+    def open_tool(self, name: str):
+        """Abre una herramienta de archivo (Comprimir, Proteger, Marca de agua, Aplanar y reparar, Convertir a PDF u
+        OCR). Salvo Convertir, necesita un PDF: si no hay, lo pide primero y la abre sola al subirlo."""
+        if name != "Convertir a PDF" and not self.ensure_files(name, lambda: self.open_tool(name)):
+            return
+        self.tools_page.show_tool(name)
         self.stack.setCurrentWidget(self.tools_page)
 
     def open_organize_view(self):
@@ -407,7 +414,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         self.organize_page.populate()
         self.stack.setCurrentWidget(self.organize_page)
 
@@ -416,7 +423,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         if not be.HAS_FITZ:
             self.snack("PyMuPDF (fitz) no está instalado", "error"); return
         self.edit_page.populate()
@@ -427,7 +434,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         if not be.HAS_FITZ:
             self.snack("PyMuPDF (fitz) no está instalado", "error"); return
         self.metadata_page.populate()
@@ -438,7 +445,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         self.split_page.populate()
         self.stack.setCurrentWidget(self.split_page)
 
@@ -447,7 +454,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         if not be.HAS_FITZ:
             self.snack("PyMuPDF (fitz) no está instalado", "error"); return
         self.size_margins_page.populate()
@@ -572,7 +579,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
+            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
         if not be.HAS_FITZ:
             self.snack("PyMuPDF (fitz) no está instalado", "error"); return
         self.nup_page.populate()

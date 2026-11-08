@@ -249,6 +249,7 @@ class BackHeader(QWidget):
         back_btn.clicked.connect(on_back)
         lbl = QLabel(title)
         lbl.setObjectName("Header")
+        self.title_lbl = lbl
         lay.addWidget(back_btn)
         lay.addSpacing(10)
         lay.addWidget(lbl)

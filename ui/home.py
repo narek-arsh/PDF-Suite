@@ -219,10 +219,20 @@ class HomePage(QWidget):
                          ("Ajuste de imagen", "droplet", w.do_ajuste_standalone)])
         group("Formato", [("Tamaño y márgenes", "resize", w.open_size_margins_view),
                           ("Varias por hoja", "nup", w.open_nup_view)])
-        group("Más", [("Herramientas", "wrench", w.open_tools_view),
-                      ("Workflows", "bolt", w.open_workflows_view)])
-        lay.addWidget(self.nav)
-        lay.addStretch(1)
+        group("Optimizar", [("Comprimir", "download", lambda: w.open_tool("Comprimir")),
+                            ("Proteger", "lock", lambda: w.open_tool("Proteger")),
+                            ("Marca de agua", "stamp", lambda: w.open_tool("Marca de agua")),
+                            ("Aplanar y reparar", "wrench", lambda: w.open_tool("Aplanar y reparar"))])
+        group("Texto y conversión", [("OCR", "pencil", lambda: w.open_tool("OCR")),
+                                     ("Convertir a PDF", "document", lambda: w.open_tool("Convertir a PDF"))])
+        group("Más", [("Workflows", "bolt", w.open_workflows_view)])
+        sc = QScrollArea()                                       # con ventanas bajas, la lista de herramientas se desplaza
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QFrame.NoFrame)
+        sc.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sc.setStyleSheet("QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; }")
+        sc.setWidget(self.nav)
+        lay.addWidget(sc, 1)
 
     def _build_action_bar(self):
         lay = QHBoxLayout(self.action_bar)
