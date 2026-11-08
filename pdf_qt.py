@@ -7757,34 +7757,167 @@ def _human_size(n: int) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
 
+class _WordEdit(QLineEdit):
+    focused = Signal(object)
+
+    def focusInEvent(self, e):
+        super().focusInEvent(e)
+        self.focused.emit(self)
+
+
+class _ReviewLine(QFrame):
+    """Una línea de la revisión: arriba el texto reconocido, con cada palabra sobre la suya, y debajo la línea
+    original recortada de la página. Así se cruzan de un vistazo."""
+    removed = Signal(object)
+    add_below = Signal(object)
+    word_focused = Signal(object, int)
+
+    def __init__(self, entry: dict, page_pm, z: float, rect: tuple, width: int):
+        super().__init__()
+        self.entry = entry
+        self.z, self.x0p, self.y0p = z, rect[0], rect[1]
+        self.setObjectName("Card")
+        bbox = entry["bbox"]
+        self._crop = None
+        self._ytop = 0
+        if bbox and page_pm is not None and not page_pm.isNull():
+            pad = 3
+            self._ytop = max(0, int((bbox[1] - self.y0p - pad) * z))
+            ybot = min(page_pm.height(), int((bbox[3] - self.y0p + pad) * z) + 1)
+            self._crop = page_pm.copy(0, self._ytop, page_pm.width(), max(10, ybot - self._ytop))
+            lh = (bbox[3] - bbox[1]) * z
+        else:
+            lh = 14 * z
+        self._font_px = int(min(max(lh * 0.62, 12), 22))
+        row_h = self._font_px + 14
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(0, 0, 6, 0)
+        outer.setSpacing(6)
+        col = QVBoxLayout()
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(0)
+        self.rec = QWidget()
+        self.rec.setFixedSize(width, row_h)
+        self.rec.setStyleSheet("background: rgba(192,130,88,0.10);")
+        col.addWidget(self.rec)
+        self.edits: list = []
+        words = entry["words"]
+        f = QFont()
+        f.setPixelSize(self._font_px)
+        fm = QFontMetrics(f)
+        if words:
+            for i, w in enumerate(words):
+                x = int((w[0] - self.x0p) * z)
+                nx = int((words[i + 1][0] - self.x0p) * z) if i + 1 < len(words) else width
+                adv = fm.horizontalAdvance(str(w[4])) + 14
+                wid = int(max((w[2] - w[0]) * z, min(adv, nx - x - 2), 28))
+                self._add_edit(str(w[4]), x, wid, row_h, f, i)
+        else:
+            self._add_edit(entry.get("text", ""), 0, width - 12, row_h, f, 0)
+            self.edits[0].setPlaceholderText("Línea nueva")
+        self.orig_text = entry.get("orig", "")
+        self.img = QLabel()
+        self.img.setFixedWidth(width)
+        self.img.setStyleSheet("background: white;")
+        col.addWidget(self.img)
+        outer.addLayout(col)
+        side = QVBoxLayout()
+        side.setContentsMargins(0, 4, 0, 4)
+        rm = QPushButton("✕")
+        rm.setObjectName("Flat")
+        rm.setFixedSize(28, 28)
+        rm.setToolTip("Borrar esta línea")
+        rm.clicked.connect(lambda: self.removed.emit(self))
+        ad = QPushButton("＋")
+        ad.setObjectName("Flat")
+        ad.setFixedSize(28, 28)
+        ad.setToolTip("Añadir una línea nueva debajo")
+        ad.clicked.connect(lambda: self.add_below.emit(self))
+        side.addWidget(rm)
+        side.addWidget(ad)
+        side.addStretch(1)
+        outer.addLayout(side)
+        self.set_highlight(None)
+        self._restyle()
+
+    def _add_edit(self, text: str, x: int, wid: int, h: int, font: QFont, i: int):
+        e = _WordEdit(text, self.rec)
+        e.setFont(font)
+        e.setGeometry(x, 2, wid, h - 4)
+        e.setCursorPosition(0)
+        e.textChanged.connect(self._restyle)
+        e.focused.connect(lambda _e, i=i: self.word_focused.emit(self, i))
+        e.returnPressed.connect(e.focusNextChild)
+        self.edits.append(e)
+
+    def _restyle(self, *_):
+        orig = self.entry.get("orig_words") or []
+        same = len(orig) == len(self.edits)
+        for i, e in enumerate(self.edits):
+            changed = (str(orig[i][4]) != e.text()) if same else (e.text() != self.entry.get("text", e.text()))
+            if not self.entry["words"]:
+                changed = True
+            bg = "rgba(255,214,0,0.28)" if changed else "rgba(0,0,0,0.25)"
+            e.setStyleSheet(f"QLineEdit {{ background:{bg}; border:1px solid rgba(255,255,255,0.12); border-radius:3px; "
+                            f"padding:0 3px; color:{TEXT}; }} QLineEdit:focus {{ border:1px solid {ACCENT}; }}")
+
+    def text(self) -> str:
+        return " ".join(t for t in (e.text().strip() for e in self.edits) if t)
+
+    def set_highlight(self, i):
+        """Marca en la línea original la palabra que se está editando."""
+        if self._crop is None:
+            self.img.setFixedHeight(18)
+            self.img.setText("  (línea añadida: no hay original)")
+            self.img.setStyleSheet("background: #2E3220; color: #A7AC80;")
+            return
+        pm = QPixmap(self._crop)
+        orig = self.entry.get("orig_words") or []
+        if i is not None and len(orig) == len(self.edits) and 0 <= i < len(orig):
+            w = orig[i]
+            qp = QPainter(pm)
+            r = QRectF((w[0] - self.x0p) * self.z - 2, (w[1] - self.y0p) * self.z - self._ytop - 2,
+                       (w[2] - w[0]) * self.z + 4, (w[3] - w[1]) * self.z + 4)
+            qp.fillRect(r, QColor(255, 214, 0, 110))
+            qp.setPen(QPen(QColor(230, 160, 0), 2))
+            qp.drawRect(r)
+            qp.end()
+        self.img.setPixmap(pm)
+        self.img.setFixedHeight(pm.height())
+
+
 class OcrReviewDialog(QDialog):
-    """Compara lo que ha leído el OCR con la página y deja corregir el texto en texto plano. La línea donde está el
-    cursor se marca en la imagen. Al aceptar se elige qué guardar: PDF con la imagen y el texto buscable, y/o un PDF
-    nuevo redibujado con el texto."""
-    WIDTH = 600                                             # ancho de la página en pantalla
+    """Compara lo que ha leído el OCR con la página, línea a línea: cada renglón muestra el texto reconocido (con cada
+    palabra encima de la suya) y debajo la línea original. Las palabras se corrigen en su sitio. Al aceptar se elige qué
+    guardar: PDF con la imagen y el texto buscable, y/o un PDF nuevo redibujado con el texto."""
+    WIDTH = 1000                                            # ancho de la página en pantalla
 
     def __init__(self, parent, review: dict):
         super().__init__(parent)
-        import fitz as _fz
         self.setWindowTitle("Revisar el texto reconocido")
-        self.resize(1240, 800)
+        geo = (parent.screen() if parent is not None else QApplication.primaryScreen()).availableGeometry()
+        self.resize(min(1180, int(geo.width() * 0.95)), int(geo.height() * 0.92))
         self.review = review
         self.pages = review["pages"]
         self._orig = {pd["index"]: ptl.review_text(pd) for pd in self.pages}
         self._texts = dict(self._orig)
         self._k = -1
         self._doc = ptl._open(review["src"], review.get("password", ""))
-        self._base = None
+        self._page_pm = None
         self._zoom = 1.0
+        self._strips: list = []
+        self._lit = None                                    # línea con una palabra resaltada
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 14)
         lay.setSpacing(8)
         title = QLabel("Revisar el texto reconocido")
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
-        hint = QLabel("Compara con la página (a la izquierda) y corrige lo que no coincida. La línea donde está el "
-                      "cursor se marca en amarillo. Una línea por renglón; puedes añadir, borrar o cambiar líneas. "
-                      "Lo que escribas en una línea en blanco se separa como párrafo.")
+        hint = QLabel("Cada línea tiene el texto reconocido arriba (cada palabra sobre la suya) y la línea original debajo. "
+                      "Corrige las palabras en su sitio: Tab pasa a la siguiente y la palabra original se marca en "
+                      "amarillo. Las palabras cambiadas se tiñen de amarillo; con ✕ borras una línea y con ＋ añades otra "
+                      "debajo.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -7807,29 +7940,17 @@ class OcrReviewDialog(QDialog):
         nav.addWidget(self.reset_b)
         lay.addLayout(nav)
 
-        split = QSplitter(Qt.Horizontal)
-        self.img = QLabel()
-        self.img.setAlignment(Qt.AlignTop | Qt.AlignHCenter)
+        self.body = QWidget()
+        self.body_lay = QVBoxLayout(self.body)
+        self.body_lay.setContentsMargins(0, 0, 0, 0)
+        self.body_lay.setSpacing(10)
+        self.body_lay.addStretch(1)
         sa = QScrollArea()
         sa.setWidgetResizable(True)
-        sa.setWidget(self.img)
+        sa.setWidget(self.body)
+        sa.setFrameShape(QFrame.NoFrame)
         self.scroll = sa
-        self.edit = QPlainTextEdit()
-        f = self.edit.font()
-        f.setPointSize(11)
-        self.edit.setFont(f)
-        self.edit.setTabChangesFocus(True)
-        self.edit.cursorPositionChanged.connect(self._mark)
-        self.edit.textChanged.connect(self._count)
-        split.addWidget(sa)
-        split.addWidget(self.edit)
-        split.setStretchFactor(0, 5)
-        split.setStretchFactor(1, 4)
-        split.setChildrenCollapsible(False)
-        split.setSizes([self.WIDTH + 40, 560])
-        sa.setMinimumWidth(self.WIDTH // 2)
-        self.img.setStyleSheet("background: transparent;")
-        lay.addWidget(split, 1)
+        lay.addWidget(sa, 1)
 
         self.cb_search = QCheckBox("PDF con la imagen y el texto detrás (se puede buscar y copiar) — recomendado")
         self.cb_search.setChecked(True)
@@ -7851,9 +7972,57 @@ class OcrReviewDialog(QDialog):
         self._goto(0)
 
     # ── páginas ─────────────────────────────────────────────────────────
+    def _page_text(self) -> str:
+        """Texto de la página tal como está ahora en pantalla: una línea por renglón y una en blanco entre bloques."""
+        out, prev = [], None
+        for s in self._strips:
+            t = s.text()
+            if not t:
+                continue
+            blk = s.entry["block"]
+            if prev is not None and blk != prev:
+                out.append("")
+            out.append(t)
+            prev = blk
+        return "\n".join(out)
+
     def _stash(self):
-        if 0 <= self._k < len(self.pages):
-            self._texts[self.pages[self._k]["index"]] = self.edit.toPlainText()
+        if 0 <= self._k < len(self.pages) and self._strips:
+            self._texts[self.pages[self._k]["index"]] = self._page_text()
+
+    def _entries(self, pd: dict, text: str) -> list:
+        """Líneas que se muestran: cada línea del texto emparejada con la original que le corresponde."""
+        old = pd["lines"]
+        new = [s.strip() for s in text.split("\n") if s.strip()]
+        out, prev_block = [], 0
+        for oi, nj in ptl.align_lines([l["text"] for l in old], new):
+            if nj is None:
+                continue
+            if oi is not None:
+                ln = old[oi]
+                words = list(ln["words"]) if new[nj] == ln["text"] else ptl._line_words(ln["bbox"], ln["words"], new[nj])
+                out.append({"oi": oi, "block": ln.get("block", 0), "bbox": ln["bbox"], "words": words,
+                            "orig": ln["text"], "orig_words": ln["words"]})
+                prev_block = ln.get("block", 0)
+            else:
+                out.append({"oi": None, "block": prev_block, "bbox": None, "words": [], "text": new[nj], "orig": ""})
+        return out
+
+    def _clear(self):
+        for s in self._strips:
+            s.setParent(None)
+            s.deleteLater()
+        self._strips = []
+        self._lit = None
+
+    def _make_strip(self, entry: dict, pd: dict):
+        s = _ReviewLine(entry, self._page_pm, self._zoom, pd["rect"], self.WIDTH)
+        s.removed.connect(self._remove)
+        s.add_below.connect(self._add_below)
+        s.word_focused.connect(self._word_focused)
+        for e in s.edits:
+            e.textChanged.connect(self._count)
+        return s
 
     def _goto(self, k: int):
         if not (0 <= k < len(self.pages)):
@@ -7861,66 +8030,68 @@ class OcrReviewDialog(QDialog):
         self._stash()
         self._k = k
         pd = self.pages[k]
-        self.edit.blockSignals(True)
-        self.edit.setPlainText(self._texts[pd["index"]])
-        self.edit.blockSignals(False)
         page = self._doc[pd["index"]]
         self._zoom = self.WIDTH / max(page.rect.width, 1.0)
         import fitz as _fz
         pix = page.get_pixmap(matrix=_fz.Matrix(self._zoom, self._zoom), alpha=False)
-        qi = QImage(pix.samples, pix.width, pix.height, pix.stride, QImage.Format_RGB888).copy()
-        self._base = QPixmap.fromImage(qi)
+        self._page_pm = QPixmap.fromImage(QImage(pix.samples, pix.width, pix.height, pix.stride,
+                                                 QImage.Format_RGB888).copy())
+        self._clear()
+        for entry in self._entries(pd, self._texts[pd["index"]]):
+            s = self._make_strip(entry, pd)
+            self.body_lay.insertWidget(len(self._strips), s)
+            self._strips.append(s)
         self.page_lbl.setText(f"  Página {k + 1} de {len(self.pages)} (hoja {pd['index'] + 1} del PDF)  ")
         self.prev_b.setEnabled(k > 0)
         self.next_b.setEnabled(k < len(self.pages) - 1)
         self.scroll.verticalScrollBar().setValue(0)
         self._count()
-        self._mark()
 
     def _restore(self):
         if self._k < 0:
             return
         idx = self.pages[self._k]["index"]
-        self.edit.setPlainText(self._orig[idx])
+        self._texts[idx] = self._orig[idx]
+        k, self._k = self._k, -1                            # evita que _goto guarde lo que hay en pantalla
+        self._clear()
+        self._goto(k)
 
-    def _lines(self) -> list:
-        return [s.strip() for s in self.edit.toPlainText().split("\n") if s.strip()]
+    def _remove(self, strip):
+        if strip in self._strips:
+            self._strips.remove(strip)
+            strip.setParent(None)
+            strip.deleteLater()
+            self._count()
 
-    def _count(self):
-        pd = self.pages[self._k]
-        new = self._lines()
-        old = [l["text"] for l in pd["lines"]]
-        changed = sum(1 for oi, nj in ptl.align_lines(old, new) if oi is None or nj is None or old[oi] != new[nj])
-        self.count_lbl.setText("Sin cambios" if changed == 0 else f"{changed} línea{'s' if changed != 1 else ''} cambiada{'s' if changed != 1 else ''}")
-        self._mark()
-
-    def _mark(self):
-        """Dibuja sobre la página las líneas leídas (tenue) y la del cursor (amarillo)."""
-        if self._base is None or self._k < 0:
+    def _add_below(self, strip):
+        if strip not in self._strips:
             return
         pd = self.pages[self._k]
-        pm = QPixmap(self._base)
-        qp = QPainter(pm)
-        z = self._zoom
-        x0p, y0p = pd["rect"][0], pd["rect"][1]
-        qp.setPen(QPen(QColor(80, 140, 220, 120), 1))
-        for ln in pd["lines"]:
-            a, b, c, d = ln["bbox"]
-            qp.drawRect(QRectF((a - x0p) * z, (b - y0p) * z, (c - a) * z, (d - b) * z))
-        cur = self.edit.textCursor().blockNumber()
-        blocks = self.edit.toPlainText().split("\n")
-        if 0 <= cur < len(blocks) and blocks[cur].strip():
-            n = sum(1 for s in blocks[:cur] if s.strip())
-            for oi, nj in ptl.align_lines([l["text"] for l in pd["lines"]], self._lines()):
-                if nj == n and oi is not None:
-                    a, b, c, d = pd["lines"][oi]["bbox"]
-                    r = QRectF((a - x0p) * z - 2, (b - y0p) * z - 2, (c - a) * z + 4, (d - b) * z + 4)
-                    qp.fillRect(r, QColor(255, 214, 0, 110))
-                    qp.setPen(QPen(QColor(230, 160, 0), 2))
-                    qp.drawRect(r)
-                    break
-        qp.end()
-        self.img.setPixmap(pm)
+        i = self._strips.index(strip) + 1
+        new = self._make_strip({"oi": None, "block": strip.entry["block"], "bbox": None, "words": [], "text": "",
+                                "orig": ""}, pd)
+        self._strips.insert(i, new)
+        self.body_lay.insertWidget(i, new)
+        new.edits[0].setFocus()
+
+    def _word_focused(self, strip, i: int):
+        if self._lit is not None and self._lit is not strip:
+            try:
+                self._lit.set_highlight(None)
+            except RuntimeError:
+                pass
+        strip.set_highlight(i)
+        self._lit = strip
+
+    def _count(self, *_):
+        if not (0 <= self._k < len(self.pages)):
+            return
+        pd = self.pages[self._k]
+        kept = {s.entry["oi"] for s in self._strips if s.entry["oi"] is not None}
+        changed = sum(1 for s in self._strips if s.text() != s.orig_text)
+        changed += sum(1 for i in range(len(pd["lines"])) if i not in kept)
+        self.count_lbl.setText("Sin cambios" if changed == 0 else
+                               f"{changed} línea{'s' if changed != 1 else ''} cambiada{'s' if changed != 1 else ''}")
 
     # ── resultado ───────────────────────────────────────────────────────
     def _accept(self):
