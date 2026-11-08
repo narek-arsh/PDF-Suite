@@ -57,6 +57,7 @@ from ui.edit_page import EditPage
 from ui.home import HomePage
 from ui.metadata import MetadataPage
 from ui.organize import OrganizePage
+from ui.pick import PickFilePage
 from ui.size_nup import NUpPage, SizeMarginsPage
 from ui.split import SplitPage
 from ui.tools import ToolsPage
@@ -90,6 +91,10 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
 
         self.uploaded_files: list[dict] = []
+        self._pending = None                 # (título, acción, mínimo de archivos) a la espera de que se suban PDFs
+        self._pending_timer = QTimer(self)
+        self._pending_timer.setSingleShot(True)
+        self._pending_timer.timeout.connect(self._run_pending)
 
         self.stack = QStackedWidget()
         self.setCentralWidget(self.stack)
@@ -103,10 +108,12 @@ class MainWindow(QMainWindow):
         self.nup_page = NUpPage(self)
         self.workflows_page = WorkflowsPage(self)
         self.tools_page = ToolsPage(self)
+        self.pick_page = PickFilePage(self)
 
         for p in (self.home_page, self.organize_page,
                   self.edit_page, self.metadata_page, self.split_page,
-                  self.size_margins_page, self.nup_page, self.workflows_page, self.tools_page):
+                  self.size_margins_page, self.nup_page, self.workflows_page, self.tools_page,
+                  self.pick_page):
             self.stack.addWidget(p)
         self.stack.setCurrentWidget(self.home_page)
 
@@ -123,6 +130,26 @@ class MainWindow(QMainWindow):
         colors = {"success": "#92976C", "error": "#D47268", "info": "#C08258"}
         self.status.setStyleSheet(f"color:{colors.get(kind, '#92976C')};")
         self.status.showMessage(msg, 4000)
+
+    def ensure_files(self, title: str, action, minimum: int = 1) -> bool:
+        """True si ya hay los PDFs que hacen falta. Si no, abre la pantalla de subida y, cuando estén cargados, ejecuta
+        `action` sola (así se puede pulsar primero la herramienta y subir el archivo después)."""
+        if len(self.uploaded_files) >= minimum:
+            return True
+        self._pending = (title, action, minimum)
+        self.pick_page.show_for(title, minimum)
+        self.stack.setCurrentWidget(self.pick_page)
+        return False
+
+    def cancel_pending(self):
+        self._pending = None
+        self._pending_timer.stop()
+
+    def _run_pending(self):
+        p = self._pending
+        if p and len(self.uploaded_files) >= p[2]:
+            self._pending = None
+            p[1]()
 
     def go_home(self):
         self.stack.setCurrentWidget(self.home_page)
@@ -182,6 +209,9 @@ class MainWindow(QMainWindow):
                 self.snack(f"PDF inválido: {name}", "error"); return
         self.uploaded_files.append({"name": name, "path": path, "pages": pages, "locked": locked})
         self.home_page.refresh_file_list()
+        if self._pending:
+            self.pick_page.show_for(self._pending[0], self._pending[2])
+            self._pending_timer.start(500)
         if locked:
             self.snack(f"🔒 {name} tiene contraseña: desbloquéalo en Herramientas → Proteger antes de usarlo.", "info")
         else:
@@ -305,8 +335,8 @@ class MainWindow(QMainWindow):
 
     # ── Acciones de la barra principal ──────────────────────────────────
     def do_merge_standalone(self):
-        if len(self.uploaded_files) < 2:
-            self.snack("Añade al menos 2 PDFs para unir", "error"); return
+        if not self.ensure_files("Unir", self.do_merge_standalone, 2):
+            return
         paths = [f["path"] for f in self.uploaded_files]
         first = Path(self.uploaded_files[0]["name"]).stem
         out_name = f"{first}_Merged.pdf"
@@ -316,8 +346,8 @@ class MainWindow(QMainWindow):
         self.after_save(dest)
 
     def do_ajuste_standalone(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Ajuste de imagen", self.do_ajuste_standalone, 1):
+            return
 
         if len(self.uploaded_files) == 1:
             self._open_ajuste_for_file(self.uploaded_files[0], single=True)
@@ -373,8 +403,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.tools_page)
 
     def open_organize_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Organizar páginas", self.open_organize_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
@@ -382,8 +412,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.organize_page)
 
     def open_edit_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Editor", self.open_edit_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
@@ -393,8 +423,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.edit_page)
 
     def open_metadata_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Metadatos", self.open_metadata_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
@@ -404,8 +434,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.metadata_page)
 
     def open_split_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Dividir", self.open_split_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
@@ -413,8 +443,8 @@ class MainWindow(QMainWindow):
         self.stack.setCurrentWidget(self.split_page)
 
     def open_size_margins_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Tamaño y márgenes", self.open_size_margins_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return
@@ -538,8 +568,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "Avisos del workflow", "\n".join(f"• {w}" for w in warns))
 
     def open_nup_view(self):
-        if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+        if not self.ensure_files("Varias por hoja", self.open_nup_view, 1):
+            return
         lf = self._locked_file()
         if lf:
             self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Herramientas → Proteger.", "error"); return

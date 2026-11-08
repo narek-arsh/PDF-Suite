@@ -270,7 +270,6 @@ class HomePage(QWidget):
         self.file_list.set_items(files)
         has_files = len(files) >= 1
         self.action_bar.setEnabled(has_files)
-        self.nav.setEnabled(has_files)
         n = len(files)
         pages = sum(f.get("pages", 0) for f in files)
         self.hint.setText(
