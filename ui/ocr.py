@@ -488,8 +488,17 @@ class _ReviewLine(QFrame):
             changed = (str(orig[i][4]) != e.text()) if same else (e.text() != self.entry.get("text", e.text()))
             if not self.entry["words"]:
                 changed = True
+            mark = (self.entry.get("marks") or {}).get(i) if same else None
+            border = "rgba(255,255,255,0.12)"
+            tip = ""
             bg = "rgba(255,214,0,0.28)" if changed else "rgba(0,0,0,0.25)"
-            e.setStyleSheet(f"QLineEdit {{ background:{bg}; border:1px solid rgba(255,255,255,0.12); border-radius:3px; "
+            if mark and not changed:
+                if mark[0] == "fixed":                      # separador corregido por su posición
+                    bg, tip = "rgba(80,140,220,0.35)", f"Corregido por su posición: el OCR había leído «{mark[1]}»"
+                else:                                       # dudoso: lo mira una persona
+                    border, tip = "#E0A030", mark[1]
+            e.setToolTip(tip)
+            e.setStyleSheet(f"QLineEdit {{ background:{bg}; border:1px solid {border}; border-radius:3px; "
                             f"padding:0 3px; color:{TEXT}; }} QLineEdit:focus {{ border:1px solid {ACCENT}; }}")
 
     def text(self) -> str:
@@ -546,8 +555,9 @@ class OcrReviewDialog(QDialog):
         lay.addWidget(title)
         hint = QLabel("Cada línea tiene el texto reconocido arriba (cada palabra sobre la suya) y la línea original debajo. "
                       "Corrige las palabras en su sitio: Tab pasa a la siguiente y la palabra original se marca en "
-                      "amarillo. Las palabras cambiadas se tiñen de amarillo; con ✕ borras una línea y con ＋ añades otra "
-                      "debajo.")
+                      "amarillo. Las palabras que cambias se tiñen de amarillo; las cantidades con el separador corregido por "
+                      "su posición, de azul; las dudosas llevan borde naranja. Con ✕ borras una línea y con ＋ añades "
+                      "otra debajo.")
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -632,7 +642,8 @@ class OcrReviewDialog(QDialog):
                 ln = old[oi]
                 words = list(ln["words"]) if new[nj] == ln["text"] else ptl._line_words(ln["bbox"], ln["words"], new[nj])
                 out.append({"oi": oi, "block": ln.get("block", 0), "bbox": ln["bbox"], "words": words,
-                            "orig": ln["text"], "orig_words": ln["words"]})
+                            "orig": ln["text"], "orig_words": ln["words"],
+                            "marks": ln.get("marks", {}) if len(words) == len(ln["words"]) else {}})
                 prev_block = ln.get("block", 0)
             else:
                 out.append({"oi": None, "block": prev_block, "bbox": None, "words": [], "text": new[nj], "orig": ""})

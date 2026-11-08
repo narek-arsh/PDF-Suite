@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import fitz
+import numfix
 
 DOWNLOADS = Path.home() / "Downloads"
 
@@ -1170,6 +1171,7 @@ def ocr(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, p
         fontfile = _text_font()
         n_words = n_tables = 0
         pages_data, rotated = [], []
+        fixer = numfix.NumberFixer(languages)          # separadores de miles/decimales mal leídos
         for k, i in enumerate(pages):
             if progress:
                 progress(k, len(pages))
@@ -1184,10 +1186,13 @@ def ocr(path: str, languages: list, dpi: int = 200, only_scanned: bool = True, p
             res = ocr_page_words(page, languages, dpi, enhance, folder, "rapid" if use_rapid else "tesseract")
             prep = res["prep"]
             ordered = [(*_page_rect_of(prep, page.rect, w), w[4]) for w in lt.ordered_words(res["blocks"])]
+            if not review:
+                fixer.learn(ordered)
+                ordered, _info = fixer.fix(ordered)
             n_words += len(ordered)
             n_tables += sum(1 for b in res["blocks"] if b.kind == "table")
             if review:
-                pages_data.append(_review_page(i, page, res))
+                pages_data.append(_review_page(i, page, res, fixer))
                 continue
             _write_invisible_text(page, ordered, fontfile)
         if review:
@@ -1231,14 +1236,29 @@ def _group_lines(words: list) -> list:
     return out
 
 
-def _review_page(i: int, page, res: dict) -> dict:
-    """Lo leído en una página, en puntos de página: líneas (con su bloque), rayas de tabla y tamaño."""
+def _review_page(i: int, page, res: dict, fixer=None) -> dict:
+    """Lo leído en una página, en puntos de página: líneas (con su bloque), rayas de tabla y tamaño. Con `fixer` se
+    corrigen los separadores de las cantidades y cada línea lleva en «marks» las palabras corregidas o dudosas."""
     prep = res["prep"]
+    blocks_ws = [[(*_page_rect_of(prep, page.rect, w), w[4]) for w in b.ordered if str(w[4]).strip()]
+                 for b in res["blocks"]]
+    info = {}
+    if fixer is not None:
+        fixer.learn([w for ws in blocks_ws for w in ws])
+        fixed = []
+        for ws in blocks_ws:
+            ws, inf = fixer.fix(ws)
+            info.update(inf)
+            fixed.append(ws)
+        blocks_ws = fixed
     lines = []
-    for bi, b in enumerate(res["blocks"]):
-        ws = [(*_page_rect_of(prep, page.rect, w), w[4]) for w in b.ordered if str(w[4]).strip()]
+    for bi, ws in enumerate(blocks_ws):
         for ln in _group_lines(ws):
             ln["block"] = bi
+            marks = {wi: info[k] for wi, w in enumerate(ln["words"])
+                     if (k := tuple(round(float(v), 2) for v in w[:4])) in info}
+            if marks:
+                ln["marks"] = marks
             lines.append(ln)
     rules = []
     for y, x0, x1 in prep.get("h_lines", []):
