@@ -18,12 +18,6 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 from theme import ACCENT
 from typing import TYPE_CHECKING

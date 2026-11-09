@@ -23,12 +23,6 @@ from PySide6.QtWidgets import (
     QTextEdit,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 from theme import TEXT, ACCENT
 from flow_layout import FlowLayout

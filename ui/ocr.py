@@ -17,12 +17,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 from PySide6.QtWidgets import QScrollArea
 import pdf_tools as ptl
 import photo_fix as pf

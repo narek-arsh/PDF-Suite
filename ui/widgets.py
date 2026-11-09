@@ -20,12 +20,6 @@ from PySide6.QtWidgets import (
     QStyleOptionSlider,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import icons as ic
 from theme import BG, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT

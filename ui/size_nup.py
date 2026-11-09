@@ -17,18 +17,12 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import _btn, add_shadow, ask_scope
+from ui.common import _save_btn, add_shadow, ask_scope
 from ui.widgets import BackHeader, PreviewPanel
 
 
@@ -92,7 +86,7 @@ class SizeMarginsPage(QWidget):
         self.fit_scale_radio.toggled.connect(lambda *_: self._touch("size"))
         sc.addLayout(fit_row)
 
-        resize_btn = _btn(tr("Aplicar tamaño"), "resize", "Primary")
+        resize_btn = _save_btn(tr("Aplicar tamaño"), "resize", "Primary")
         resize_btn.clicked.connect(self._do_resize)
         sc.addWidget(resize_btn)
         left.addWidget(size_card)
@@ -124,7 +118,7 @@ class SizeMarginsPage(QWidget):
         for sp in (self.margin_top, self.margin_bottom, self.margin_left, self.margin_right):
             sp.valueChanged.connect(lambda *_: self._touch("margins"))
 
-        margin_btn = _btn(tr("Aplicar márgenes"), "crop", "Primary")
+        margin_btn = _save_btn(tr("Aplicar márgenes"), "crop", "Primary")
         margin_btn.clicked.connect(self._do_margins)
         mc.addWidget(margin_btn)
         left.addWidget(margin_card)
@@ -339,7 +333,7 @@ class NUpPage(QWidget):
 
         left.addWidget(card)
 
-        apply_btn = _btn(tr("Aplicar N-Up"), "nup", "Primary")
+        apply_btn = _save_btn(tr("Aplicar N-Up"), "nup", "Primary")
         apply_btn.clicked.connect(self._do_nup)
         left.addWidget(apply_btn)
         left.addStretch(1)

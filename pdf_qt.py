@@ -25,12 +25,6 @@ from PySide6.QtWidgets import (
     QProgressDialog,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import pdf_tools as ptl
 import workflows as wf
@@ -106,6 +100,7 @@ class MainWindow(QMainWindow):
                   self.pick_page, self.compare_page):
             self.stack.addWidget(p)
         self.stack.setCurrentWidget(self.home_page)
+        self.stack.currentChanged.connect(lambda _i: self.cancel_save_as())
 
         self._wf_progress: QProgressDialog | None = None
         self.steps_changed.connect(self.home_page.refresh_steps_bar)
@@ -250,11 +245,7 @@ class MainWindow(QMainWindow):
         if pages == 0:
             locked = ptl.is_locked(path)
             if locked:
-                try:
-                    import fitz as _fz
-                    pages = 1
-                except Exception:
-                    pages = 1
+                pages = 1
             else:
                 self.snack(tr("PDF inválido: {name}", name=name), "error"); return
         self.uploaded_files.append({"name": name, "path": path, "pages": pages, "locked": locked})
@@ -347,19 +338,69 @@ class MainWindow(QMainWindow):
         self.saved_id = ""
         self.steps_changed.emit()
 
+    # ── «Guardar como…» (en vez de Descargas) ───────────────────────────────
+    def request_save_as(self):
+        self._save_as_pending = True
+
+    def cancel_save_as(self):
+        self._save_as_pending = False
+
+    def relocate_output(self, path: str) -> str:
+        """Si el usuario eligió «Guardar como…», mueve el resultado (ya creado en Descargas) adonde quiera. Con
+        varios archivos seguidos, pregunta una vez y deja los demás en la misma carpeta."""
+        folder = getattr(self, "_save_as_folder", None)
+        if folder is None and not getattr(self, "_save_as_pending", False):
+            return path
+        src = Path(path)
+        if folder is None:
+            self._save_as_pending = False
+            start_dir = getattr(self, "_last_save_dir", None) or Path.home() / "Documents"
+            if not Path(start_dir).is_dir():
+                start_dir = Path.home()
+            ext = src.suffix
+            dest, _ = QFileDialog.getSaveFileName(
+                self, tr("Guardar como"), str(Path(start_dir) / src.name), f"{ext.lstrip('.').upper()} (*{ext})")
+            if not dest:
+                self.snack(tr("Se ha dejado en Descargas."), "info")
+                return path
+            dest = Path(dest)
+            if dest.suffix.lower() != ext.lower():
+                dest = dest.with_name(dest.name + ext)
+            self._save_as_folder = dest.parent
+            QTimer.singleShot(0, lambda: setattr(self, "_save_as_folder", None))
+        else:
+            dest = folder / src.name
+            n = 2
+            while dest.exists() and dest != src:
+                dest = folder / f"{src.stem} ({n}){src.suffix}"
+                n += 1
+        self._last_save_dir = dest.parent
+        if dest.resolve() != src.resolve():
+            try:
+                os.replace(src, dest)
+            except OSError:
+                shutil.copy2(src, dest)
+                os.remove(src)
+        return str(dest)
+
     def load_single_result(self, out_path: str):
         """Tras procesar: el resultado pasa a ser el único archivo cargado,
         listo para guardarlo o encadenar otra herramienta de la suite."""
+        out_path = self.relocate_output(out_path)
         pages = be.safe_page_count(out_path)
         self.uploaded_files = [{"name": Path(out_path).name, "path": out_path, "pages": pages}]
         self.home_page.refresh_file_list()
         self.go_home()
-        self.snack(tr("✓ {name} — guardado en Descargas. "
-                      "Puedes guardarlo como o seguir con otra herramienta.", name=Path(out_path).name))
+        if Path(out_path).parent.resolve() == Path(be.DOWNLOADS).resolve():
+            self.snack(tr("✓ {name} — guardado en Descargas. "
+                          "Puedes guardarlo como o seguir con otra herramienta.", name=Path(out_path).name))
+        else:
+            self.snack(tr("✓ Guardado: {name}", name=str(out_path)))
 
     def replace_file(self, old_f: dict, new_path: str):
         """Sustituye un archivo concreto (p.ej. tras Edit/Metadata) por su
         versión procesada, sin tocar el resto de archivos cargados."""
+        new_path = self.relocate_output(new_path)
         pages = be.safe_page_count(new_path)
         new_f = {"name": Path(new_path).name, "path": new_path, "pages": pages}
         if old_f in self.uploaded_files:

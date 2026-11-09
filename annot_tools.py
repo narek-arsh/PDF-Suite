@@ -293,23 +293,6 @@ def _shape_hit(annot, pt, tol=5.0, ignore_fill=False) -> bool:
     return min(abs(pt[0] - r.x0), abs(pt[0] - r.x1), abs(pt[1] - r.y0), abs(pt[1] - r.y1)) <= tol
 
 
-def describe_shape(annot) -> dict:
-    t = annot.type[0]
-    cols = annot.colors or {}
-    d = {"xref": annot.xref, "width": (annot.border or {}).get("width", 1.0) or 1.0,
-         "stroke": cols.get("stroke"), "fill": cols.get("fill")}
-    if t == fitz.PDF_ANNOT_LINE:
-        v = annot.vertices
-        d["kind"] = "arrow" if annot.line_ends and annot.line_ends[1] != fitz.PDF_ANNOT_LE_NONE else "line"
-        d["p0"], d["p1"] = (v[0][0], v[0][1]), (v[-1][0], v[-1][1])
-    else:
-        r = annot.rect
-        d["kind"] = "rect" if t == fitz.PDF_ANNOT_SQUARE else "ellipse"
-        d["p0"], d["p1"] = (r.x0, r.y0), (r.x1, r.y1)
-    d["opacity"] = annot.opacity
-    return d
-
-
 def move_shape(doc, page_idx: int, desc: dict, dx: float, dy: float) -> bool:
     """Mueve una forma: se vuelve a crear en la nueva posición con los mismos colores y grosor."""
     page = doc[page_idx]

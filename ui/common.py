@@ -3,9 +3,9 @@
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRectF, Signal, QThread, QObject
+from PySide6.QtCore import Qt, QSize, QRect, QRectF, Signal, QThread, QObject
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
-from PySide6.QtWidgets import QPushButton, QMessageBox, QGraphicsDropShadowEffect
+from PySide6.QtWidgets import QPushButton, QMessageBox, QGraphicsDropShadowEffect, QMenu
 
 try:
     from PySide6.QtSvg import QSvgRenderer
@@ -27,6 +27,66 @@ def _btn(text: str, icon_name: str | None = None, object_name: str | None = None
          icon_color: str | None = None, size: int = 17) -> QPushButton:
     """Crea un QPushButton con un icono vectorial propio (sin emoji)."""
     b = QPushButton(("  " + text) if (icon_name and text) else text)
+    if object_name:
+        b.setObjectName(object_name)
+    if icon_name:
+        color = icon_color or (ICON_DARK if object_name == "Primary" else TEXT)
+        b.setIcon(ic.icon(icon_name, color, size))
+        b.setIconSize(QSize(size, size))
+    return b
+
+
+class SaveSplitButton(QPushButton):
+    """Botón de acción con una flecha a la derecha que ofrece «Guardar como…»: el resultado se guarda donde el
+    usuario elija en vez de en Descargas. La parte principal se comporta como un QPushButton normal."""
+    ARROW_W = 30
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setStyleSheet(f"padding-right:{self.ARROW_W + 6}px;")
+        self._menu = QMenu(self)
+        self._menu.addAction(ic.icon("download", TEXT, 16), tr("Guardar como…"), self._save_as)
+
+    def _main(self):
+        win = self.window()
+        return win if hasattr(win, "request_save_as") else None
+
+    def _save_as(self):
+        win = self._main()
+        if win is not None:
+            win.request_save_as()
+        self.click()
+
+    def mousePressEvent(self, e):
+        in_arrow = e.position().x() >= self.width() - self.ARROW_W
+        if e.button() == Qt.LeftButton and self.isEnabled():
+            if in_arrow:
+                self._menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+                return
+            win = self._main()
+            if win is not None:
+                win.cancel_save_as()
+        super().mousePressEvent(e)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        color = QColor(ICON_DARK if self.objectName() == "Primary" else TEXT)
+        sep = QColor(color)
+        sep.setAlpha(90 if self.isEnabled() else 40)
+        x = self.width() - self.ARROW_W
+        p.setPen(sep)
+        p.drawLine(x, 9, x, self.height() - 11)
+        pm = ic.icon("chevron_down", color.name(), 12).pixmap(12, 12)
+        p.drawPixmap(QRect(x + (self.ARROW_W - 12) // 2, (self.height() - 12) // 2, 12, 12), pm)
+        p.end()
+
+
+def _save_btn(text: str, icon_name: str | None = None, object_name: str | None = "Primary",
+              icon_color: str | None = None, size: int = 17) -> SaveSplitButton:
+    """Como _btn, pero con la flecha «Guardar como…» (para botones que producen un archivo)."""
+    b = SaveSplitButton(("  " + text) if (icon_name and text) else text)
     if object_name:
         b.setObjectName(object_name)
     if icon_name:

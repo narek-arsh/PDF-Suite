@@ -33,12 +33,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 from PySide6.QtWidgets import QPlainTextEdit, QScrollArea
 import pdf_tools as ptl
 import photo_fix as pf
@@ -47,7 +41,7 @@ from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import ICON_DARK, _ToolJob, _btn, _human_size, ask_scope
+from ui.common import ICON_DARK, _ToolJob, _btn, _human_size, _save_btn, ask_scope
 from ui.ocr import OcrPagesPanel, OcrReviewDialog
 from ui.widgets import BackHeader
 
@@ -426,7 +420,7 @@ class ToolsPage(QWidget):
             lay.addWidget(rb)
             if key == "medium":
                 rb.setChecked(True)
-        b = _btn(tr("Comprimir"), "download", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Comprimir"), "download", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_compress)
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
@@ -475,7 +469,7 @@ class ToolsPage(QWidget):
             perms.addWidget(w)
         perms.addStretch(1)
         c.addLayout(perms)
-        b = _btn(tr("Bloquear"), "lock", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Bloquear"), "lock", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_lock)
         c.addWidget(b, 0, Qt.AlignLeft)
         lay.addWidget(card)
@@ -488,7 +482,7 @@ class ToolsPage(QWidget):
                     "sean tuyos o que tengas permiso para modificar."))
         h2.setObjectName("Hint"); h2.setWordWrap(True)
         c2.addWidget(h2)
-        b2 = _btn(tr("Quitar protección"), "check", "Secondary", icon_color=TEXT)
+        b2 = _save_btn(tr("Quitar protección"), "check", "Secondary", icon_color=TEXT)
         b2.clicked.connect(self._do_unlock)
         c2.addWidget(b2, 0, Qt.AlignLeft)
         lay.addWidget(card2)
@@ -617,7 +611,7 @@ class ToolsPage(QWidget):
         self.wm_pages.setPlaceholderText(tr("todas  ·  ejemplos: 1-3, 5, 8-   ·   pares   ·   impares"))
         r4.addWidget(self.wm_pages, 1)
         lay.addLayout(r4)
-        b = _btn(tr("Añadir marca de agua"), "stamp", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Añadir marca de agua"), "stamp", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_wm)
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
@@ -780,7 +774,7 @@ class ToolsPage(QWidget):
         r3.addWidget(self.pn_pages, 1)
         lay.addLayout(r3)
 
-        b = _btn(tr("Añadir numeración"), "text_add", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Añadir numeración"), "text_add", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_numbering)
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
@@ -902,7 +896,7 @@ class ToolsPage(QWidget):
         r3.addWidget(self.inv_pages, 1)
         lay.addLayout(r3)
 
-        b = _btn(tr("Invertir colores"), "droplet", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Invertir colores"), "droplet", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_invert)
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
@@ -963,14 +957,14 @@ class ToolsPage(QWidget):
         self.flat_annots = QCheckBox(tr("Anotaciones (resaltados, dibujos, notas, sellos…)")); self.flat_annots.setChecked(True)
         self.flat_widgets = QCheckBox(tr("Campos de formulario (con lo rellenado)")); self.flat_widgets.setChecked(True)
         c.addWidget(self.flat_annots); c.addWidget(self.flat_widgets)
-        b = _btn(tr("Aplanar"), "document", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Aplanar"), "document", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_flatten)
         c.addWidget(b, 0, Qt.AlignLeft)
         lay.addWidget(card)
         card2 = QFrame(); card2.setObjectName("Card")
         c2 = QVBoxLayout(card2)
         t2 = QLabel(tr("Reparar")); t2.setObjectName("SectionTitle"); c2.addWidget(t2)
-        b2 = _btn(tr("Reparar PDF"), "bolt", "Secondary", icon_color=TEXT)
+        b2 = _save_btn(tr("Reparar PDF"), "bolt", "Secondary", icon_color=TEXT)
         b2.clicked.connect(self._do_repair)
         c2.addWidget(b2, 0, Qt.AlignLeft)
         lay.addWidget(card2)
@@ -1039,7 +1033,7 @@ class ToolsPage(QWidget):
             self.conv_size.addItem(n)
         r.addWidget(self.conv_size)
         lay.addLayout(r)
-        b = _btn(tr("Convertir"), "play", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Convertir"), "play", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_convert)
         lay.addWidget(b, 0, Qt.AlignLeft)
 
@@ -1173,7 +1167,7 @@ class ToolsPage(QWidget):
         self.exp_note = QLabel(); self.exp_note.setObjectName("Hint"); self.exp_note.setWordWrap(True)
         lay.addWidget(self.exp_note)
 
-        b = _btn(tr("Convertir"), "download", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Convertir"), "download", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_export)
         lay.addWidget(b, 0, Qt.AlignLeft)
         lay.addStretch(1)
@@ -1207,6 +1201,8 @@ class ToolsPage(QWidget):
         pages = self.exp_pages.text()
 
         def each(f, r):
+            for out in r.get("files", []):
+                self.win.relocate_output(out)
             return True, None
         self._run_for_files(self._targets(scope), lambda path, pw: ptl.convert_from_pdf(path, fmt, dpi, pages, pw),
                             each, tr("Convirtiendo…"), tr("convertido (en Descargas)"))
@@ -1442,7 +1438,7 @@ class ToolsPage(QWidget):
         self.ocr_straighten.toggled.connect(self.ocr_panel.setVisible)
         self.ocr_only.toggled.connect(lambda _on: self.ocr_panel.refresh_all())
         self.tabs.currentChanged.connect(lambda _i: self._load_ocr_panel())
-        b = _btn(tr("Reconocer texto"), "play", "Primary", icon_color=ICON_DARK)
+        b = _save_btn(tr("Reconocer texto"), "play", "Primary", icon_color=ICON_DARK)
         b.clicked.connect(self._do_ocr)
         lay.addWidget(b, 0, Qt.AlignLeft)
         self._ocr_checks: dict = {}

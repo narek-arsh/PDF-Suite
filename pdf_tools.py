@@ -883,7 +883,6 @@ def native_to_pdf(path: str) -> str:
 # La conversión con el propio Word/Excel/PowerPoint (automatización COM) está DESACTIVADA hasta verificarla: en las
 # primeras pruebas fallaba y dejaba procesos de Office abiertos. LibreOffice (línea de comandos) sí está activa.
 OFFICE_COM_ENABLED = False
-LIBREOFFICE_DOWNLOAD_URL = "https://www.libreoffice.org/download/download-libreoffice/"
 
 
 def office_engines() -> dict:
@@ -1058,7 +1057,6 @@ def office_to_pdf(path: str) -> str:
             pass
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
-    names = names0
     if tried:
         raise ToolError(f"No se pudo convertir con {' ni con '.join(tried)}: el archivo puede estar dañado, protegido "
                         "con contraseña o ser de un formato que ese programa no abre.")

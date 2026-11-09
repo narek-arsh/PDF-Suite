@@ -11,3 +11,6 @@ Font/
 # Salidas y copias de trabajo
 *_editado.pdf
 *.bak*
+
+# Instalador generado
+installer_output/

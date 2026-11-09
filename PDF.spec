@@ -15,11 +15,11 @@ datas = [
 ]
 binaries = []
 hiddenimports = [
-    "i18n", "theme", "backend", "pdf_tools", "layout_tools", "numfix", "photo_fix",
+    "i18n", "appinfo", "theme", "backend", "pdf_tools", "layout_tools", "numfix", "photo_fix",
     "workflows", "draft", "click_icons", "stamp_tool", "signature_pad", "form_tools",
     "fontmanager", "winfonts", "annot_tools", "icons", "flow_layout",
     "ui.home", "ui.tools", "ui.edit_page", "ui.editor_view", "ui.editor_parts", "ui.ocr",
-    "ui.organize", "ui.split", "ui.metadata", "ui.size_nup", "ui.compare", "ui.pick",
+    "ui.organize", "ui.split", "ui.metadata", "ui.size_nup", "ui.compare", "ui.feedback", "ui.pick",
     "ui.ajuste", "ui.workflows_ui", "ui.widgets", "ui.common",
 ]
 

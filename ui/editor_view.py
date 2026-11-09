@@ -39,12 +39,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import icons as ic
 import winfonts
@@ -1560,7 +1554,6 @@ class PageEditorView(QGraphicsView):
         tmp = at.with_geom(d, geom)
         self._sh_page = page_idx
         z, top = self.zoom, self._page_tops[page_idx]
-        names = at.SHAPE_COLORS
         cname = self._sh_color_name(d["stroke"])
         if tmp["kind"] == "poly":
             for it in self._sh_preview:

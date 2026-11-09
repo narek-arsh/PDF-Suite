@@ -33,6 +33,6 @@ Copyright (C) 2026 Provecto.
 Este programa es software libre: puedes redistribuirlo y/o modificarlo bajo los términos de la
 **GNU Affero General Public License v3.0** (ver [LICENSE](LICENSE)). Se distribuye sin ninguna
 garantía. El código fuente de la versión distribuida está disponible en este repositorio:
-<https://github.com/narek-arsh/PDF-Manager>.
+<https://github.com/provecto-app/PDF-Manager>.
 
 Los componentes de terceros y sus licencias están en [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

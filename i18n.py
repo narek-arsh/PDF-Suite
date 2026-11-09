@@ -1198,6 +1198,19 @@ TR = {
         " La página original no se ha tocado.": " The original page wasn't touched.",
         "Texto reconocido en {pages} página(s) ({words} palabras{extra}).": "Text recognized on {pages} page(s) ({words} words{extra}).",
         "Guardado en Descargas: {name}": "Saved in Downloads: {name}",
+
+        # --- ui/feedback.py ---
+        "Enviar comentarios": "Send feedback",
+        "Sugerencia": "Suggestion",
+        "Cuéntanos qué ha fallado o qué te gustaría que hiciera la aplicación. Nunca se envían tus PDF ni su contenido: solo lo que escribas aquí.": "Tell us what went wrong or what you'd like the app to do. Your PDFs and their content are never sent: only what you write here.",
+        "Describe el problema o la idea (qué hacías, qué esperabas y qué pasó)": "Describe the problem or idea (what you were doing, what you expected and what happened)",
+        "Incluir información técnica (versión, sistema operativo e idioma)": "Include technical information (version, operating system and language)",
+        "Esto es lo que se enviará:": "This is what will be sent:",
+        "Enviar por correo": "Send by email",
+        "Abrir en GitHub": "Open on GitHub",
+        "Se ha abierto tu navegador con el mensaje ya redactado: revísalo y envíalo.": "Your browser has opened with the message already written: review it and send it.",
+        "Copiado al portapapeles.": "Copied to the clipboard.",
+        "Se ha dejado en Descargas.": "It was left in Downloads.",
     },
     "pt": {
         "Buscar una función… (p. ej. «firmar», «formulario», «numerar»)":
@@ -2347,6 +2360,19 @@ TR = {
         " La página original no se ha tocado.": " A página original não foi alterada.",
         "Texto reconocido en {pages} página(s) ({words} palabras{extra}).": "Texto reconhecido em {pages} página(s) ({words} palavras{extra}).",
         "Guardado en Descargas: {name}": "Salvo em Downloads: {name}",
+
+        # --- ui/feedback.py ---
+        "Enviar comentarios": "Enviar comentários",
+        "Sugerencia": "Sugestão",
+        "Cuéntanos qué ha fallado o qué te gustaría que hiciera la aplicación. Nunca se envían tus PDF ni su contenido: solo lo que escribas aquí.": "Conte-nos o que falhou ou o que gostaria que o aplicativo fizesse. Seus PDFs e o conteúdo deles nunca são enviados: apenas o que você escrever aqui.",
+        "Describe el problema o la idea (qué hacías, qué esperabas y qué pasó)": "Descreva o problema ou a ideia (o que você fazia, o que esperava e o que aconteceu)",
+        "Incluir información técnica (versión, sistema operativo e idioma)": "Incluir informações técnicas (versão, sistema operacional e idioma)",
+        "Esto es lo que se enviará:": "Isto é o que será enviado:",
+        "Enviar por correo": "Enviar por e-mail",
+        "Abrir en GitHub": "Abrir no GitHub",
+        "Se ha abierto tu navegador con el mensaje ya redactado: revísalo y envíalo.": "O navegador foi aberto com a mensagem já escrita: revise e envie.",
+        "Copiado al portapapeles.": "Copiado para a área de transferência.",
+        "Se ha dejado en Descargas.": "Foi deixado em Downloads.",
     },
 }
 

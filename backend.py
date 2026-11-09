@@ -1288,7 +1288,6 @@ def replace_paragraph_in_doc(doc, page_idx: int, para: dict, new_text: str, size
         pg = doc[page_idx]
         geo = _geo_with_settings(_doc_geometry(doc), settings)
         pages_before = doc.page_count
-        page_w, page_h = pg.rect.width, pg.rect.height
         limit = _limit(geo, pg.rect)
         x0, y0, x1, y1 = para["bbox"]
         pitch, k = para["pitch"], para["n_lines"]
@@ -1766,7 +1765,6 @@ def delete_pages(doc, indices: list, settings=None) -> dict:
     try:
         geo = _geo_with_settings(_doc_geometry(doc), settings)
         numbering = geo["settings"]["numbering"]
-        first = min(idx)
         for i in idx:
             doc.delete_page(i)
         touched = set()

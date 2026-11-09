@@ -28,12 +28,6 @@ from PySide6.QtWidgets import (
     QProgressBar,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import icons as ic
 import winfonts
@@ -51,7 +45,7 @@ from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import ICON_DARK, _LIST_SELECT_QSS, _btn, add_shadow, on_gui, run_bg
+from ui.common import ICON_DARK, _LIST_SELECT_QSS, _btn, _save_btn, add_shadow, on_gui, run_bg
 from ui.editor_parts import (
     ClickIconDialog,
     CopyDialog,
@@ -196,7 +190,6 @@ class FontDownloadDialog(QDialog):
         row = self.rows[family]
         it = row["item"]
         row["info"], row["substitute"] = data["info"], data["substitute"]
-        n_styles = len(row["group"]["styles"])
         if data["info"]:
             it.setText(tr("«{family}» — disponible en Google Fonts ({n} estilos)",
                           family=family, n=len(data['info']['files'])))
@@ -455,7 +448,7 @@ class EditPage(QWidget):
         tb.addWidget(self.zoom_btn)
         tb.addWidget(zi)
         tb.addSpacing(10)
-        save_btn = _btn(tr("Guardar"), "save", "Primary")
+        save_btn = _save_btn(tr("Guardar"), "save", "Primary")
         save_btn.clicked.connect(self._save_changes)
         tb.addWidget(save_btn)
         root.addWidget(toolbar)

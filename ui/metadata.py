@@ -5,25 +5,18 @@ from PySide6.QtWidgets import (
     QWidget,
     QLabel,
     QLineEdit,
-    QPushButton,
     QHBoxLayout,
     QVBoxLayout,
     QFrame,
     QComboBox,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import add_shadow, ask_scope, _ToolJob
+from ui.common import add_shadow, ask_scope, _save_btn, _ToolJob
 from ui.widgets import BackHeader
 
 
@@ -74,11 +67,9 @@ class MetadataPage(QWidget):
         root.addWidget(card)
 
         btn_row = QHBoxLayout()
-        save_btn = QPushButton(tr("Guardar cambios"))
-        save_btn.setObjectName("Primary")
+        save_btn = _save_btn(tr("Guardar cambios"), None, "Primary")
         save_btn.clicked.connect(self._do_save)
-        clear_btn = QPushButton(tr("Borrar todos los metadatos"))
-        clear_btn.setObjectName("Danger")
+        clear_btn = _save_btn(tr("Borrar todos los metadatos"), None, "Danger")
         clear_btn.clicked.connect(self._do_clear)
         btn_row.addWidget(save_btn)
         btn_row.addWidget(clear_btn)

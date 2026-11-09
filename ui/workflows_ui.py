@@ -18,12 +18,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import workflows as wf
 from theme import DANGER
 from i18n import tr

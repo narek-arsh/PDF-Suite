@@ -15,12 +15,6 @@ from PySide6.QtWidgets import (
     QFrame,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import icons as ic
 from PySide6.QtWidgets import QScrollArea
@@ -33,7 +27,8 @@ from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import ICON_DARK, _btn, add_shadow, glow, on_gui, provecto_logo_pixmap, run_bg
+from ui.common import ICON_DARK, _btn, _save_btn, add_shadow, glow, on_gui, provecto_logo_pixmap, run_bg
+from ui.feedback import FeedbackDialog
 from ui.widgets import DropArea, FileListWidget
 
 
@@ -237,6 +232,15 @@ class HomePage(QWidget):
 
         toolbar_row = QHBoxLayout()
         toolbar_row.addStretch(1)
+        fb_btn = QPushButton()
+        fb_btn.setObjectName("Flat")
+        fb_btn.setFixedSize(28, 28)
+        fb_btn.setStyleSheet("padding:0;")
+        fb_btn.setIcon(ic.icon("info", TEXT_SOFT, 16))
+        fb_btn.setToolTip(tr("Enviar comentarios"))
+        fb_btn.clicked.connect(lambda: FeedbackDialog(self.win).exec())
+        toolbar_row.addWidget(fb_btn)
+        toolbar_row.addSpacing(4)
         lang_btn = QPushButton(i18n.LANG.upper())
         lang_btn.setObjectName("Flat")
         lang_btn.setFixedSize(32, 28)
@@ -341,7 +345,7 @@ class HomePage(QWidget):
         clear_btn.clicked.connect(self.win.clear_all)
         save_btn = _btn(tr("Guardar como…"), "download")
         save_btn.clicked.connect(self.win.do_save_as_copy)
-        self.merge_btn = _btn(tr("Unir"), "link", "Primary")
+        self.merge_btn = _save_btn(tr("Unir"), "link", "Primary")
         self.merge_btn.clicked.connect(self.win.do_merge_standalone)
         lay.addWidget(clear_btn)
         lay.addStretch(1)

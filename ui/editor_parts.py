@@ -30,12 +30,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
 )
 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    HAS_SVG = True
-except ImportError:
-    HAS_SVG = False
-
 import backend as be
 import icons as ic
 import annot_tools as at
