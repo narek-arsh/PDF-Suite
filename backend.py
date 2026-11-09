@@ -307,46 +307,6 @@ def get_page_text_spans(doc, page_idx: int) -> list[dict]:
     return spans
 
 
-def replace_span_in_doc(doc, page_idx: int, bbox: tuple, new_text: str,
-                         font_size: float | None = None,
-                         source_font: str = "", color=None,
-                         family: str | None = None, bold: bool | None = None,
-                         italic: bool | None = None) -> tuple[bool, bool, str]:
-    """
-    Sustituye en memoria el texto de una caja concreta por new_text, usando
-    la MISMA fuente del PDF original si está instalada en Windows (busca en
-    winfonts); si no está instalada, usa una fuente base de respaldo.
-    family/bold/italic fuerzan otro estilo; si son None se deduce del original.
-    No guarda a disco: eso lo decide la sesión de edición al terminar.
-    Devuelve (ok, fuente_encontrada, nombre_de_familia_detectado).
-    """
-    matched_file, found_family = (None, "")
-    try:
-        pg = doc[page_idx]
-        r = fitz.Rect(*bbox)
-        pg.add_redact_annot(r, fill=False)
-        pg.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
-        if new_text:
-            size = font_size or max(6.0, min((bbox[3] - bbox[1]) * 0.8, 24.0))
-            pos = fitz.Point(bbox[0], bbox[3] - 1)
-            src_bold, src_italic = winfonts.style_from_ps_name(source_font)
-            bold = src_bold if bold is None else bold
-            italic = src_italic if italic is None else italic
-            if family:
-                matched_file, found_family = winfonts.find_styled_font(family, bold, italic), family
-            elif source_font:
-                matched_file, found_family = winfonts.find_font_file(source_font)
-                if matched_file and (bold or italic):
-                    matched_file = winfonts.find_styled_font(found_family, bold, italic) or matched_file
-            base14 = {(False, False): "helv", (True, False): "hebo",
-                      (False, True): "heit", (True, True): "hebi"}[(bool(bold), bool(italic))]
-            _insert_text_with_fallback(pg, pos, new_text, size, matched_file,
-                                       _rgb_tuple(color) if color is not None else (0, 0, 0), base14)
-        return True, bool(matched_file), found_family
-    except Exception:
-        return False, bool(matched_file), found_family
-
-
 def recolor_text_in_boxes(doc, page_idx: int, boxes: list, rgb) -> int:
     """Cambia el color del texto que queda dentro de las cajas (p. ej. a azul de hipervínculo) conservando la fuente, el
     tamaño y la posición. Solo cambia lo que está dentro: un tramo a medias de una línea se parte en lo que se
@@ -684,31 +644,6 @@ def _resolve_font(source_font: str, family, bold, italic):
     base14 = {(False, False): "helv", (True, False): "hebo",
               (False, True): "heit", (True, True): "hebi"}[(bool(bold), bool(italic))]
     return matched_file, found_family, base14
-
-
-def _wrap_text(text: str, width_of, max_w: float) -> list[str]:
-    """Reparte el texto en líneas que caben en max_w; respeta los saltos de línea."""
-    out: list[str] = []
-    for para in text.split("\n"):
-        if not para.strip():
-            out.append("")
-            continue
-        cur = ""
-        for word in para.split(" "):
-            cand = word if not cur else cur + " " + word
-            if width_of(cand) <= max_w or not cur:
-                cur = cand
-                while width_of(cur) > max_w and len(cur) > 1:   # palabra más ancha que la línea
-                    k = len(cur) - 1
-                    while k > 1 and width_of(cur[:k]) > max_w:
-                        k -= 1
-                    out.append(cur[:k])
-                    cur = cur[k:]
-            else:
-                out.append(cur)
-                cur = word
-        out.append(cur)
-    return out
 
 
 _GEO_CACHE: dict = {}
@@ -2032,30 +1967,6 @@ def clear_metadata(path: str) -> str | None:
 
 
 # ── DIVIDIR PDF ───────────────────────────────────────────────────────────
-def split_pdf(path: str, n: int, label: str = "parte") -> list[str]:
-    """Divide el PDF en bloques de n páginas (n=1 => cada página individual)."""
-    try:
-        reader = PdfReader(path)
-        total = len(reader.pages)
-        if total == 0 or n <= 0:
-            return []
-        stem = Path(path).stem
-        out_dir = DOWNLOADS / f"{stem}_dividido"
-        out_dir.mkdir(exist_ok=True)
-        outputs = []
-        parte = 1
-        for start in range(0, total, n):
-            writer = PdfWriter()
-            for p in reader.pages[start:start + n]:
-                writer.add_page(p)
-            out_path = out_dir / f"{stem}_{label}{parte}.pdf"
-            with open(out_path, "wb") as f:
-                writer.write(f)
-            outputs.append(str(out_path))
-            parte += 1
-        return outputs
-    except Exception:
-        return []
 
 
 def extract_pages_as_files(path: str, pages_per_file: list[list[int]],

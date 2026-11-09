@@ -11,12 +11,12 @@ import tempfile
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QPointF, QRectF, QSize
+from PySide6.QtCore import Qt, QPointF, QSize
 from PySide6.QtGui import (QColor, QFont, QFontDatabase, QImage, QPainter, QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QCheckBox, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QListWidget,
                                QListWidgetItem, QPushButton, QSlider, QTabWidget, QVBoxLayout, QWidget)
 
-from theme import TEXT, ACCENT, SURFACE_2, BORDER
+from theme import TEXT, ACCENT, BORDER
 
 COLORS = {"Negro": "#111111", "Azul oscuro": "#1B2A6B", "Azul": "#1E50C8"}
 SCRIPT_FONTS = ["Segoe Script", "Ink Free", "Lucida Handwriting", "Brush Script MT", "Segoe Print", "Mistral",

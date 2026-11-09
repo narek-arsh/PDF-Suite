@@ -9,11 +9,11 @@ import tempfile
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QRectF, QSize
+from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetricsF, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout)
 
-from theme import TEXT, ACCENT, BORDER
+from theme import TEXT
 
 PRESETS = [("APROBADO", "#1E8E3E"), ("RECHAZADO", "#C5221F"), ("REVISADO", "#1E8E3E"), ("RECIBIDO", "#1A5FD0"),
            ("BORRADOR", "#6B7280"), ("CONFIDENCIAL", "#C5221F"), ("URGENTE", "#E8710A"), ("PAGADO", "#1E8E3E"),

@@ -1,28 +1,20 @@
 # -*- coding: utf-8 -*-
 """OCR: editor de esquinas, enderezado de fotos y revisión del texto reconocido."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal, QThread
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QFont, QFontMetrics, QPen, QPainterPath
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QWidget,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QVBoxLayout,
+    QFrame,
+    QCheckBox,
+    QDialog,
+    QMessageBox,
 )
 
 try:
@@ -31,23 +23,11 @@ try:
 except ImportError:
     HAS_SVG = False
 
-import backend as be
-import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
+from PySide6.QtWidgets import QScrollArea
 import pdf_tools as ptl
-import layout_tools as lt
 import photo_fix as pf
-import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import TEXT, TEXT_SOFT, ACCENT, DANGER
+from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from ui.tools import ToolsPage
@@ -241,8 +221,8 @@ class CornerEditDialog(QDialog):
         head = QLabel(title)
         head.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(head)
-        hint = QLabel("Arrastra cada punto a su esquina del papel: mientras arrastras aparece una lupa con una cruz «+». "
-                      "Para afinar, elige un punto y mueve con las flechas del teclado (1 píxel; con Mayús, 5).")
+        hint = QLabel(tr("Arrastra cada punto a su esquina del papel: mientras arrastras aparece una lupa con una cruz «+». "
+                      "Para afinar, elige un punto y mueve con las flechas del teclado (1 píxel; con Mayús, 5)."))
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -252,14 +232,14 @@ class CornerEditDialog(QDialog):
         self.canvas.corners = [tuple(c) for c in corners]
         lay.addWidget(self.canvas, 1)
         row = QHBoxLayout()
-        auto = _btn("Detectar de nuevo", "bolt", "Secondary", icon_color=TEXT)
+        auto = _btn(tr("Detectar de nuevo"), "bolt", "Secondary", icon_color=TEXT)
         auto.clicked.connect(self._auto)
-        full = _btn("Toda la página", "grid", "Secondary", icon_color=TEXT)
+        full = _btn(tr("Toda la página"), "grid", "Secondary", icon_color=TEXT)
         full.clicked.connect(lambda: self._set([(0.02, 0.02), (0.98, 0.02), (0.98, 0.98), (0.02, 0.98)]))
         self.msg = QLabel("")
         self.msg.setObjectName("Hint")
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Aplicar", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        ok = _btn(tr("Aplicar"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self.accept)
         row.addWidget(auto)
@@ -277,114 +257,12 @@ class CornerEditDialog(QDialog):
         if det:
             w, h = self.image.size
             self._set([(x / w, y / h) for x, y in det])
-            self.msg.setText("Esquinas detectadas: comprueba que cada punto está en su sitio.")
+            self.msg.setText(tr("Esquinas detectadas: comprueba que cada punto está en su sitio."))
         else:
-            self.msg.setText("No distingo el papel del fondo: colócalas a mano.")
+            self.msg.setText(tr("No distingo el papel del fondo: colócalas a mano."))
 
     def corners(self) -> list:
         return [tuple(c) for c in self.canvas.corners]
-
-
-class PhotoFixDialog(QDialog):
-    """Ajusta las cuatro esquinas del papel de una foto para estirarla a una página plana."""
-    def __init__(self, parent, image):
-        super().__init__(parent)
-        self.setWindowTitle("Enderezar foto")
-        self.resize(940, 860)
-        self.image = image
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 16, 18, 14)
-        lay.setSpacing(8)
-        title = QLabel("Enderezar foto")
-        title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
-        lay.addWidget(title)
-        self.msg = QLabel("")
-        self.msg.setObjectName("Hint")
-        self.msg.setWordWrap(True)
-        lay.addWidget(self.msg)
-        self.canvas = CornerCanvas(image)
-        lay.addWidget(self.canvas, 1)
-        row = QHBoxLayout()
-        auto = _btn("Detectar de nuevo", "bolt", "Secondary", icon_color=TEXT)
-        auto.clicked.connect(self._auto)
-        full = _btn("Toda la imagen", None, "Secondary", icon_color=TEXT)
-        full.clicked.connect(lambda: (self.canvas.set_corners([(0.02, 0.02), (0.98, 0.02), (0.98, 0.98), (0.02, 0.98)]),
-                                      self._set_msg("Arrastra cada punto a su esquina del papel.")))
-        row.addWidget(auto)
-        row.addWidget(full)
-        row.addSpacing(10)
-        row.addWidget(QLabel("Formato"))
-        self.snap = QComboBox()
-        for label, key in (("Automático", "auto"), ("A4", "A4"), ("Carta", "Carta"), ("Como se ve", "medido")):
-            self.snap.addItem(label, key)
-        self.snap.currentIndexChanged.connect(self._refresh_preview)
-        row.addWidget(self.snap)
-        self.flatten = QCheckBox("Aclarar fondo y luz")
-        self.flatten.setChecked(True)
-        self.flatten.toggled.connect(self._refresh_preview)
-        row.addWidget(self.flatten)
-        self.view = QCheckBox("Ver resultado")
-        self.view.toggled.connect(self._toggle_preview)
-        row.addWidget(self.view)
-        row.addStretch(1)
-        lay.addLayout(row)
-        btns = QHBoxLayout()
-        self.note = QLabel("Una hoja arrugada o curvada no se puede aplanar así: usa una foto con el papel plano y bien iluminado.")
-        self.note.setObjectName("Hint")
-        self.note.setWordWrap(True)
-        btns.addWidget(self.note, 1)
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Corregir página", "check", "Primary", icon_color=ICON_DARK)
-        cancel.clicked.connect(self.reject)
-        ok.clicked.connect(self.accept)
-        btns.addWidget(cancel)
-        btns.addWidget(ok)
-        lay.addLayout(btns)
-        self.canvas.changed.connect(self._refresh_preview)
-        self._auto()
-
-    def _set_msg(self, text: str):
-        self.msg.setText(text)
-
-    def _auto(self):
-        det = pf.detect_corners(self.image)
-        if det:
-            self.canvas.set_corners([(x / self.image.width, y / self.image.height) for x, y in det])
-            self._set_msg("He encontrado las esquinas del papel. Comprueba que los cuatro puntos están en su sitio y "
-                          "arrástralos si hace falta.")
-            self.detected = True
-        else:
-            self.canvas.set_corners([(0.12, 0.12), (0.88, 0.12), (0.88, 0.88), (0.12, 0.88)])
-            self._set_msg("No distingo bien el papel del fondo: arrastra los cuatro puntos a las esquinas de la hoja.")
-            self.detected = False
-
-    def _quad(self):
-        return pf.order_corners([(x * self.image.width, y * self.image.height) for x, y in self.canvas.corners])
-
-    def _toggle_preview(self, on: bool):
-        self.canvas.preview = None
-        if on:
-            self._refresh_preview()
-        else:
-            self.canvas.update()
-
-    def _refresh_preview(self, *_):
-        if not self.view.isChecked():
-            return
-        q = self._quad()
-        if not pf.is_convex(q):
-            self.canvas.preview = None
-            return
-        size = pf.target_size(q, self.snap.currentData(), max_side=900)
-        flat = pf.warp(self.image, q, size)
-        if self.flatten.isChecked():
-            flat = pf.flatten_light(flat)
-        self.canvas.preview = QPixmap.fromImage(QImage(flat.tobytes(), flat.width, flat.height, flat.width * 3,
-                                                       QImage.Format_RGB888).copy())
-        self.canvas.update()
-
-    def result(self) -> dict:
-        return {"corners": self.canvas.corners, "snap": self.snap.currentData(), "flatten": self.flatten.isChecked()}
 
 
 class _WordEdit(QLineEdit):
@@ -445,7 +323,7 @@ class _ReviewLine(QFrame):
                 self._add_edit(str(w[4]), x, wid, row_h, f, i)
         else:
             self._add_edit(entry.get("text", ""), 0, width - 12, row_h, f, 0)
-            self.edits[0].setPlaceholderText("Línea nueva")
+            self.edits[0].setPlaceholderText(tr("Línea nueva"))
         self.orig_text = entry.get("orig", "")
         self.img = QLabel()
         self.img.setFixedWidth(width)
@@ -457,12 +335,12 @@ class _ReviewLine(QFrame):
         rm = QPushButton("✕")
         rm.setObjectName("Flat")
         rm.setFixedSize(28, 28)
-        rm.setToolTip("Borrar esta línea")
+        rm.setToolTip(tr("Borrar esta línea"))
         rm.clicked.connect(lambda: self.removed.emit(self))
         ad = QPushButton("＋")
         ad.setObjectName("Flat")
         ad.setFixedSize(28, 28)
-        ad.setToolTip("Añadir una línea nueva debajo")
+        ad.setToolTip(tr("Añadir una línea nueva debajo"))
         ad.clicked.connect(lambda: self.add_below.emit(self))
         side.addWidget(rm)
         side.addWidget(ad)
@@ -494,7 +372,7 @@ class _ReviewLine(QFrame):
             bg = "rgba(255,214,0,0.28)" if changed else "rgba(0,0,0,0.25)"
             if mark and not changed:
                 if mark[0] == "fixed":                      # separador corregido por su posición
-                    bg, tip = "rgba(80,140,220,0.35)", f"Corregido por su posición: el OCR había leído «{mark[1]}»"
+                    bg, tip = "rgba(80,140,220,0.35)", tr("Corregido por su posición: el OCR había leído «{val}»", val=mark[1])
                 else:                                       # dudoso: lo mira una persona
                     border, tip = "#E0A030", mark[1]
             e.setToolTip(tip)
@@ -508,7 +386,7 @@ class _ReviewLine(QFrame):
         """Marca en la línea original la palabra que se está editando."""
         if self._crop is None:
             self.img.setFixedHeight(18)
-            self.img.setText("  (línea añadida: no hay original)")
+            self.img.setText("  " + tr("(línea añadida: no hay original)"))
             self.img.setStyleSheet("background: #2E3220; color: #A7AC80;")
             return
         pm = QPixmap(self._crop)
@@ -534,7 +412,7 @@ class OcrReviewDialog(QDialog):
 
     def __init__(self, parent, review: dict):
         super().__init__(parent)
-        self.setWindowTitle("Revisar el texto reconocido")
+        self.setWindowTitle(tr("Revisar el texto reconocido"))
         geo = (parent.screen() if parent is not None else QApplication.primaryScreen()).availableGeometry()
         self.resize(min(1180, int(geo.width() * 0.95)), int(geo.height() * 0.92))
         self.review = review
@@ -550,25 +428,25 @@ class OcrReviewDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(18, 16, 18, 14)
         lay.setSpacing(8)
-        title = QLabel("Revisar el texto reconocido")
+        title = QLabel(tr("Revisar el texto reconocido"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
-        hint = QLabel("Cada línea tiene el texto reconocido arriba (cada palabra sobre la suya) y la línea original debajo. "
+        hint = QLabel(tr("Cada línea tiene el texto reconocido arriba (cada palabra sobre la suya) y la línea original debajo. "
                       "Corrige las palabras en su sitio: Tab pasa a la siguiente y la palabra original se marca en "
                       "amarillo. Las palabras que cambias se tiñen de amarillo; las cantidades con el separador corregido por "
                       "su posición, de azul; las dudosas llevan borde naranja. Con ✕ borras una línea y con ＋ añades "
-                      "otra debajo.")
+                      "otra debajo."))
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         lay.addWidget(hint)
 
         nav = QHBoxLayout()
-        self.prev_b = _btn("Anterior", None, "Secondary", icon_color=TEXT)
-        self.next_b = _btn("Siguiente", None, "Secondary", icon_color=TEXT)
+        self.prev_b = _btn(tr("Anterior"), None, "Secondary", icon_color=TEXT)
+        self.next_b = _btn(tr("Siguiente"), None, "Secondary", icon_color=TEXT)
         self.prev_b.clicked.connect(lambda: self._goto(self._k - 1))
         self.next_b.clicked.connect(lambda: self._goto(self._k + 1))
         self.page_lbl = QLabel("")
-        self.reset_b = _btn("Restaurar el texto leído", None, "Secondary", icon_color=TEXT)
+        self.reset_b = _btn(tr("Restaurar el texto leído"), None, "Secondary", icon_color=TEXT)
         self.reset_b.clicked.connect(self._restore)
         nav.addWidget(self.prev_b)
         nav.addWidget(self.page_lbl)
@@ -592,18 +470,18 @@ class OcrReviewDialog(QDialog):
         self.scroll = sa
         lay.addWidget(sa, 1)
 
-        self.cb_search = QCheckBox("PDF con la imagen y el texto detrás (se puede buscar y copiar) — recomendado")
+        self.cb_search = QCheckBox(tr("PDF con la imagen y el texto detrás (se puede buscar y copiar) — recomendado"))
         self.cb_search.setChecked(True)
-        self.cb_redraw = QCheckBox("PDF nuevo redibujado solo con el texto (sin la imagen)")
-        self.cb_redraw.setToolTip("Crea un segundo PDF donde el texto se dibuja a la vista en su posición, con las rayas de "
+        self.cb_redraw = QCheckBox(tr("PDF nuevo redibujado solo con el texto (sin la imagen)"))
+        self.cb_redraw.setToolTip(tr("Crea un segundo PDF donde el texto se dibuja a la vista en su posición, con las rayas de "
                                   "las tablas. Sirve para tener el documento limpio y editable. No conserva dibujos, "
-                                  "sellos ni fotos.")
+                                  "sellos ni fotos."))
         lay.addWidget(self.cb_search)
         lay.addWidget(self.cb_redraw)
         row = QHBoxLayout()
         row.addStretch(1)
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        self.ok = _btn("Guardar", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        self.ok = _btn(tr("Guardar"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         self.ok.clicked.connect(self._accept)
         row.addWidget(cancel)
@@ -682,7 +560,8 @@ class OcrReviewDialog(QDialog):
             s = self._make_strip(entry, pd)
             self.body_lay.insertWidget(len(self._strips), s)
             self._strips.append(s)
-        self.page_lbl.setText(f"  Página {k + 1} de {len(self.pages)} (hoja {pd['index'] + 1} del PDF)  ")
+        self.page_lbl.setText("  " + tr("Página {n} de {total} (hoja {sheet} del PDF)",
+                                        n=k + 1, total=len(self.pages), sheet=pd['index'] + 1) + "  ")
         self.prev_b.setEnabled(k > 0)
         self.next_b.setEnabled(k < len(self.pages) - 1)
         self.scroll.verticalScrollBar().setValue(0)
@@ -731,13 +610,15 @@ class OcrReviewDialog(QDialog):
         kept = {s.entry["oi"] for s in self._strips if s.entry["oi"] is not None}
         changed = sum(1 for s in self._strips if s.text() != s.orig_text)
         changed += sum(1 for i in range(len(pd["lines"])) if i not in kept)
-        self.count_lbl.setText("Sin cambios" if changed == 0 else
-                               f"{changed} línea{'s' if changed != 1 else ''} cambiada{'s' if changed != 1 else ''}")
+        word_line = tr("línea") if changed == 1 else tr("líneas")
+        word_changed = tr("cambiada") if changed == 1 else tr("cambiadas")
+        self.count_lbl.setText(tr("Sin cambios") if changed == 0 else
+                               f"{changed} {word_line} {word_changed}")
 
     # ── resultado ───────────────────────────────────────────────────────
     def _accept(self):
         if not (self.cb_search.isChecked() or self.cb_redraw.isChecked()):
-            QMessageBox.information(self, "Guardar", "Marca al menos una de las dos opciones de guardado.")
+            QMessageBox.information(self, tr("Guardar"), tr("Marca al menos una de las dos opciones de guardado."))
             return
         self._stash()
         self.accept()
@@ -829,7 +710,8 @@ class _PageThumb(QFrame):
         super().paintEvent(e)
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        label, color = _OCR_STATES[self.state]
+        label_es, color = _OCR_STATES[self.state]
+        label = tr(label_es)
         box = QRectF(8, 8, 114, 134)
         if not self.pix.isNull():
             s = min(box.width() / self.pix.width(), box.height() / self.pix.height())
@@ -848,7 +730,7 @@ class _PageThumb(QFrame):
         f.setBold(True)
         p.setFont(f)
         p.setPen(QColor(TEXT))
-        p.drawText(QRectF(8, 146, 114, 16), Qt.AlignLeft, f"Página {self.idx + 1}")
+        p.drawText(QRectF(8, 146, 114, 16), Qt.AlignLeft, tr("Página {n}", n=self.idx + 1))
         f.setBold(False)
         f.setPointSize(max(7, f.pointSize() - 1))
         p.setFont(f)
@@ -880,7 +762,7 @@ class OcrPagesPanel(QWidget):
         self.canvas.setMinimumSize(320, 300)
         self.canvas.editable = False                          # los puntos se mueven en la ventana grande
         self.canvas.setCursor(Qt.PointingHandCursor)
-        self.canvas.setToolTip("Pulsa para ajustar las esquinas en grande")
+        self.canvas.setToolTip(tr("Pulsa para ajustar las esquinas en grande"))
         self.canvas.clicked.connect(self.open_big)
         top.addWidget(self.canvas, 3)
         side = QFrame()
@@ -895,14 +777,14 @@ class OcrPagesPanel(QWidget):
         self.msg.setObjectName("Hint")
         self.msg.setWordWrap(True)
         sl.addWidget(self.msg)
-        for text, icon_name, slot, primary in (("Ajustar en grande…", "crop", self.open_big, True),
-                                               ("Detectar esta página", "bolt", self.detect_current, False),
-                                               ("Detectar todas", "bolt", self.detect_all, False),
-                                               ("Toda la página", "grid", self.full_page, False)):
+        for text, icon_name, slot, primary in ((tr("Ajustar en grande…"), "crop", self.open_big, True),
+                                               (tr("Detectar esta página"), "bolt", self.detect_current, False),
+                                               (tr("Detectar todas"), "bolt", self.detect_all, False),
+                                               (tr("Toda la página"), "grid", self.full_page, False)):
             b = _btn(text, icon_name, "Primary" if primary else None)
             b.clicked.connect(slot)
             sl.addWidget(b)
-        self.view = QCheckBox("Ver resultado enderezado")
+        self.view = QCheckBox(tr("Ver resultado enderezado"))
         self.view.toggled.connect(self._toggle_preview)
         sl.addWidget(self.view)
         sl.addStretch(1)
@@ -948,9 +830,9 @@ class OcrPagesPanel(QWidget):
         self.title.setText("")
         self.summary.setText("")
         if key is None:
-            self.msg.setText("Este archivo no se puede previsualizar (tiene contraseña o no hay archivo).")
+            self.msg.setText(tr("Este archivo no se puede previsualizar (tiene contraseña o no hay archivo)."))
             return
-        self.msg.setText("Cargando páginas…")
+        self.msg.setText(tr("Cargando páginas…"))
         self._loader = _PageLoader(f["path"], password)
         self._loader.page_ready.connect(self._on_page)
         self._loader.start()
@@ -965,7 +847,7 @@ class OcrPagesPanel(QWidget):
         if self.sel < 0:
             self.select(0)
         else:
-            self.title.setText(f"Página {self.sel + 1} de {len(self.pages)}")
+            self.title.setText(tr("Página {n} de {total}", n=self.sel + 1, total=len(self.pages)))
 
     # ── estado ─────────────────────────────────────────────────────────
     def _state(self, i: int) -> str:
@@ -989,11 +871,11 @@ class OcrPagesPanel(QWidget):
         counts = {"auto": 0, "manual": 0, "none": 0, "skip": 0}
         for i in range(len(self.pages)):
             counts[self._state(i)] += 1
-        parts = [f"{counts['auto']} detectadas", f"{counts['manual']} manual"]
+        parts = [tr("{n} detectadas", n=counts['auto']), tr("{n} manual", n=counts['manual'])]
         if counts["none"]:
-            parts.append(f"{counts['none']} sin detectar (solo se endereza el texto)")
+            parts.append(tr("{n} sin detectar (solo se endereza el texto)", n=counts['none']))
         if counts["skip"]:
-            parts.append(f"{counts['skip']} ya tienen texto (se omiten)")
+            parts.append(tr("{n} ya tienen texto (se omiten)", n=counts['skip']))
         self.summary.setText(" · ".join(parts))
 
     def manual(self) -> dict:
@@ -1029,27 +911,17 @@ class OcrPagesPanel(QWidget):
     def _show_message(self):
         i = self.sel
         state = self._state(i)
-        self.title.setText(f"Página {i + 1} de {len(self.pages)}")
+        self.title.setText(tr("Página {n} de {total}", n=i + 1, total=len(self.pages)))
         self.canvas.show_corners = state != "skip"
         self.msg.setText({
-            "auto": "Esquinas detectadas automáticamente. Si algo no encaja, pulsa «Ajustar en grande…».",
-            "manual": "Esquinas marcadas por ti. «Detectar esta página» vuelve a la detección automática.",
-            "none": "No distingo el papel del fondo. Pulsa «Ajustar en grande…» para marcar las esquinas, o déjala "
-                    "así (solo se endereza el texto).",
-            "skip": "Esta página ya tiene texto y se deja como está (desmarca «Solo las páginas sin texto» para "
-                    "tratarla).",
+            "auto": tr("Esquinas detectadas automáticamente. Si algo no encaja, pulsa «Ajustar en grande…»."),
+            "manual": tr("Esquinas marcadas por ti. «Detectar esta página» vuelve a la detección automática."),
+            "none": tr("No distingo el papel del fondo. Pulsa «Ajustar en grande…» para marcar las esquinas, o déjala "
+                    "así (solo se endereza el texto)."),
+            "skip": tr("Esta página ya tiene texto y se deja como está (desmarca «Solo las páginas sin texto» para "
+                    "tratarla)."),
         }[state])
         self.canvas.update()
-
-    def _on_changed(self):
-        if self._busy or not 0 <= self.sel < len(self.pages):
-            return
-        st = self.pages[self.sel]
-        st["corners"] = [tuple(c) for c in self.canvas.corners]
-        st["src"] = "manual"
-        self._refresh(self.sel)
-        self._show_message()
-        self._refresh_preview()
 
     def _set_corners(self, corners, src: str):
         st = self.pages[self.sel]
@@ -1098,7 +970,7 @@ class OcrPagesPanel(QWidget):
             return
         st = self.pages[self.sel]
         start = st["corners"] or [(0.12, 0.12), (0.88, 0.12), (0.88, 0.88), (0.12, 0.88)]
-        dlg = CornerEditDialog(self.window(), img, start, f"Esquinas · página {self.sel + 1}")
+        dlg = CornerEditDialog(self.window(), img, start, tr("Esquinas · página {n}", n=self.sel + 1))
         if dlg.exec() != QDialog.Accepted:
             return
         new = dlg.corners()

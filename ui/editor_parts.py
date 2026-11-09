@@ -1,28 +1,33 @@
 # -*- coding: utf-8 -*-
 """Piezas del editor de páginas: barras, menús y diálogos (insertar, cabecera, notas, campos, enlaces)."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QSize, QRectF, Signal
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QPen, QBrush
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QWidget,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QVBoxLayout,
+    QListWidget,
+    QFileDialog,
+    QFrame,
+    QComboBox,
+    QCheckBox,
+    QRadioButton,
+    QSpinBox,
+    QDialog,
+    QMessageBox,
+    QMenu,
+    QTextEdit,
+    QGraphicsView,
+    QGraphicsScene,
+    QGraphicsRectItem,
+    QColorDialog,
+    QGridLayout,
 )
 
 try:
@@ -33,22 +38,13 @@ except ImportError:
 
 import backend as be
 import icons as ic
-import winfonts
-import fontmanager as fm
 import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
 import pdf_tools as ptl
 import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
 import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import SURFACE, SURFACE_2, SURFACE_3, TEXT, ACCENT, BORDER_STRONG, DANGER
 from ui.common import ICON_DARK, _btn
+from i18n import tr
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -228,7 +224,7 @@ class InsertPageDialog(QDialog):
 
     def __init__(self, view, doc, at: int, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Insertar página")
+        self.setWindowTitle(tr("Insertar página"))
         self.view, self.doc, self.at = view, doc, at
         self.choice = None                    # "blank" | "pdf"
         self.settings = None                  # ajustes de cabecera/pie para la hoja en blanco (None = detección automática)
@@ -237,10 +233,10 @@ class InsertPageDialog(QDialog):
         self.has_hf = be.has_header_footer(doc, at, view.hf)
         self.resize(640, 460)
         lay = QVBoxLayout(self)
-        lay.addWidget(self._title("¿Qué quieres insertar aquí?"))
+        lay.addWidget(self._title(tr("¿Qué quieres insertar aquí?")))
         row = QHBoxLayout()
-        self.blank_rb = QRadioButton("Una página en blanco")
-        self.pdf_rb = QRadioButton("Páginas de otro documento (PDF)…")
+        self.blank_rb = QRadioButton(tr("Una página en blanco"))
+        self.pdf_rb = QRadioButton(tr("Páginas de otro documento (PDF)…"))
         self.blank_rb.setChecked(True)
         row.addWidget(self.blank_rb)
         row.addWidget(self.pdf_rb)
@@ -251,13 +247,13 @@ class InsertPageDialog(QDialog):
         hl = QHBoxLayout(self.hf_box)
         hl.setContentsMargins(0, 0, 0, 0)
         left = QVBoxLayout()
-        info = QLabel("Se ha detectado cabecera, pie o fondo de página en este documento." if view.hf is None
-                      else "Este documento tiene la cabecera y el pie que configuraste.")
+        info = QLabel(tr("Se ha detectado cabecera, pie o fondo de página en este documento.") if view.hf is None
+                      else tr("Este documento tiene la cabecera y el pie que configuraste."))
         info.setWordWrap(True)
         left.addWidget(info)
-        self.keep_rb = QRadioButton("Mantener cabecera, pie y fondo")
-        self.empty_rb = QRadioButton("Hoja totalmente en blanco")
-        self.conf_rb = QRadioButton("Configurar cabecera y pie…")
+        self.keep_rb = QRadioButton(tr("Mantener cabecera, pie y fondo"))
+        self.empty_rb = QRadioButton(tr("Hoja totalmente en blanco"))
+        self.conf_rb = QRadioButton(tr("Configurar cabecera y pie…"))
         self.keep_rb.setChecked(True)
         for rb in (self.keep_rb, self.empty_rb, self.conf_rb):
             left.addWidget(rb)
@@ -277,8 +273,8 @@ class InsertPageDialog(QDialog):
         lay.addWidget(self.pdf_lbl)
         btns = QHBoxLayout()
         btns.addStretch(1)
-        cancel = _btn("Cancelar", None, "Secondary")
-        self.ok_btn = _btn("Insertar", "plus", "Primary")
+        cancel = _btn(tr("Cancelar"), None, "Secondary")
+        self.ok_btn = _btn(tr("Insertar"), "plus", "Primary")
         cancel.clicked.connect(self.reject)
         self.ok_btn.clicked.connect(self._accept)
         btns.addWidget(cancel)
@@ -297,7 +293,7 @@ class InsertPageDialog(QDialog):
     def _on_kind(self):
         blank = self.blank_rb.isChecked()
         self.hf_box.setVisible(blank and self.has_hf)
-        self.pdf_lbl.setText("" if blank else "Al pulsar «Insertar» elegirás el PDF cuyas páginas se añaden aquí.")
+        self.pdf_lbl.setText("" if blank else tr("Al pulsar «Insertar» elegirás el PDF cuyas páginas se añaden aquí."))
 
     def _current_settings(self):
         if self.empty_rb.isChecked():
@@ -324,12 +320,12 @@ class InsertPageDialog(QDialog):
             pm.loadFromData(png)
             self.preview.setPixmap(pm)
         else:
-            self.preview.setText("Sin vista previa")
+            self.preview.setText(tr("Sin vista previa"))
 
     def _accept(self):
         if self.pdf_rb.isChecked():
-            path, _ = QFileDialog.getOpenFileName(self, "Elige el PDF a insertar", str(Path.home()),
-                                                  "PDF (*.pdf);;Todos los archivos (*.*)")
+            path, _ = QFileDialog.getOpenFileName(self, tr("Elige el PDF a insertar"), str(Path.home()),
+                                                  tr("PDF (*.pdf);;Todos los archivos (*.*)"))
             if not path:
                 return
             self.choice, self.pdf_path = "pdf", path
@@ -345,16 +341,16 @@ class ClickIconDialog(QDialog):
     def __init__(self, parent=None, live=None):
         super().__init__(parent)
         self.live = live
-        self.setWindowTitle("Cambiar icono" if live else "Icono de «clic aquí»")
+        self.setWindowTitle(tr("Cambiar icono") if live else tr("Icono de «clic aquí»"))
         self.kind = None
         lay = QVBoxLayout(self)
-        lbl = QLabel("Pulsa un icono para cambiarlo al momento; puedes probar varios." if live else
-                     "El enlace está sobre una imagen. ¿Quieres insertar alguno de estos iconos para indicar a quien "
-                     "lea el PDF que puede hacer clic? Después podrás moverlo y girarlo un poco para que no tape nada.")
+        lbl = QLabel(tr("Pulsa un icono para cambiarlo al momento; puedes probar varios.") if live else
+                     tr("El enlace está sobre una imagen. ¿Quieres insertar alguno de estos iconos para indicar a quien "
+                     "lea el PDF que puede hacer clic? Después podrás moverlo y girarlo un poco para que no tape nada."))
         lbl.setWordWrap(True)
         lay.addWidget(lbl)
         grid = QGridLayout()
-        entries = ci.builtin_kinds() + [(k, "Tu imagen") for k in ci.list_custom()]
+        entries = ci.builtin_kinds() + [(k, tr("Tu imagen")) for k in ci.list_custom()]
         for i, (key, label) in enumerate(entries):
             pm = QPixmap(84, 84)
             pm.fill(QColor("#FFFFFF"))
@@ -371,20 +367,20 @@ class ClickIconDialog(QDialog):
             grid.addWidget(b, i // 4, i % 4)
         lay.addLayout(grid)
         row = QHBoxLayout()
-        own = _btn("Usar mi propia imagen…", "image", "Secondary")
-        own.setToolTip("Importa un PNG, JPG o SVG para usarlo como icono (queda guardado para otros documentos)")
+        own = _btn(tr("Usar mi propia imagen…"), "image", "Secondary")
+        own.setToolTip(tr("Importa un PNG, JPG o SVG para usarlo como icono (queda guardado para otros documentos)"))
         own.clicked.connect(self._own)
         row.addWidget(own)
         row.addStretch(1)
-        no = _btn("Cerrar" if live else "No, gracias", None, "Secondary")
+        no = _btn(tr("Cerrar") if live else tr("No, gracias"), None, "Secondary")
         no.clicked.connect(self.reject)
         row.addWidget(no)
         lay.addLayout(row)
 
     def _own(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "Elige las imágenes de tus iconos", str(Path.home() / "Pictures"),
-            "Imágenes e ilustraciones (*.png *.jpg *.jpeg *.svg *.ai *.eps *.pdf *.webp *.gif *.bmp);;Todos (*.*)")
+            self, tr("Elige las imágenes de tus iconos"), str(Path.home() / "Pictures"),
+            tr("Imágenes e ilustraciones (*.png *.jpg *.jpeg *.svg *.ai *.eps *.pdf *.webp *.gif *.bmp);;Todos (*.*)"))
         keys, errors = [], []
         for pth in paths:
             key, err = ci.import_custom(pth)
@@ -393,7 +389,7 @@ class ClickIconDialog(QDialog):
             else:
                 errors.append(f"{Path(pth).name}: {err}")
         if errors:
-            QMessageBox.warning(self, "Icono", "\n".join(errors))
+            QMessageBox.warning(self, tr("Icono"), "\n".join(errors))
         if keys:
             self._pick(keys[0])                 # el primero se usa ya; los demás quedan guardados en la lista
 
@@ -411,7 +407,7 @@ class HeaderFooterDialog(QDialog):
     impares, y si se sigue la numeración."""
     def __init__(self, doc, page_idx: int, settings, parent=None, intro: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Cabecera y pie de página")
+        self.setWindowTitle(tr("Cabecera y pie de página"))
         self.doc, self.page_idx, self.settings = doc, page_idx, settings
         auto_h, auto_f = be.auto_header_footer(doc, page_idx)
         s = {**be.DEFAULT_HF, **(settings or {})}
@@ -456,36 +452,36 @@ class HeaderFooterDialog(QDialog):
         # ── Opciones ─────────────────────────────────────────────────────
         side = QVBoxLayout()
         side.setSpacing(10)
-        title = QLabel("Cabecera y pie de página")
+        title = QLabel(tr("Cabecera y pie de página"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         side.addWidget(title)
-        text = intro or ("Marca con un clic los textos que son cabecera o pie: no se moverán al "
-                         "repartir el texto entre páginas y se podrán repetir en las páginas nuevas.")
+        text = intro or (tr("Marca con un clic los textos que son cabecera o pie: no se moverán al "
+                         "repartir el texto entre páginas y se podrán repetir en las páginas nuevas."))
         info = QLabel(text)
         info.setObjectName("Hint")
         info.setWordWrap(True)
         side.addWidget(info)
 
-        side.addWidget(QLabel("Cada clic marca el texto como:"))
-        self.role_header = QRadioButton("Cabecera (azul)")
-        self.role_footer = QRadioButton("Pie de página (verde)")
+        side.addWidget(QLabel(tr("Cada clic marca el texto como:")))
+        self.role_header = QRadioButton(tr("Cabecera (azul)"))
+        self.role_footer = QRadioButton(tr("Pie de página (verde)"))
         self.role_header.setChecked(True)
         side.addWidget(self.role_header)
         side.addWidget(self.role_footer)
-        self.rep_header = QCheckBox("Repetir la cabecera en las páginas nuevas")
+        self.rep_header = QCheckBox(tr("Repetir la cabecera en las páginas nuevas"))
         self.rep_header.setChecked(s["repeat_header"])
-        self.rep_footer = QCheckBox("Repetir el pie en las páginas nuevas")
+        self.rep_footer = QCheckBox(tr("Repetir el pie en las páginas nuevas"))
         self.rep_footer.setChecked(s["repeat_footer"])
         side.addSpacing(6)
         side.addWidget(self.rep_header)
         side.addWidget(self.rep_footer)
 
         side.addSpacing(6)
-        side.addWidget(QLabel("¿Son iguales en todas las páginas?"))
-        self.same_all = QRadioButton("Iguales en todas")
-        self.parity = QRadioButton("Distintos en pares e impares")
+        side.addWidget(QLabel(tr("¿Son iguales en todas las páginas?")))
+        self.same_all = QRadioButton(tr("Iguales en todas"))
+        self.parity = QRadioButton(tr("Distintos en pares e impares"))
         (self.parity if s["parity"] else self.same_all).setChecked(True)
-        par_hint = QLabel("La página nueva copia la de dos antes, o la anterior si no hay.")
+        par_hint = QLabel(tr("La página nueva copia la de dos antes, o la anterior si no hay."))
         par_hint.setObjectName("Hint")
         par_hint.setWordWrap(True)
         side.addWidget(self.same_all)
@@ -493,7 +489,7 @@ class HeaderFooterDialog(QDialog):
         side.addWidget(par_hint)
 
         side.addSpacing(6)
-        self.numbering = QCheckBox("Seguir la numeración de página")
+        self.numbering = QCheckBox(tr("Seguir la numeración de página"))
         self.numbering.setChecked(s["numbering"])
         self.num_info = QLabel()
         self.num_info.setObjectName("Hint")
@@ -503,8 +499,8 @@ class HeaderFooterDialog(QDialog):
         side.addStretch(1)
 
         btns = QHBoxLayout()
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Continuar", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        ok = _btn(tr("Continuar"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self._accept)
         btns.addStretch(1)
@@ -531,9 +527,9 @@ class HeaderFooterDialog(QDialog):
         hb, fb = self._bounds()
         found = be.find_page_numbers(self.doc, self.page_idx, hb, fb)
         self.num_info.setText(
-            "Número de página detectado: " + ", ".join(f"«{t}»" for t in found) +
-            ". En la página nueva subirá solo."
-            if found else "No se ha detectado ningún número de página en lo marcado.")
+            tr("Número de página detectado: {nums}. En la página nueva subirá solo.",
+               nums=", ".join(f"«{t}»" for t in found))
+            if found else tr("No se ha detectado ningún número de página en lo marcado."))
 
     def _accept(self):
         self.settings = {
@@ -556,14 +552,14 @@ class CopyDialog(QDialog):
     """Texto de la zona elegida, con párrafos, columnas y tablas respetados. Se puede editar antes de copiar."""
     def __init__(self, parent, blocks: list, note: str = ""):
         super().__init__(parent)
-        self.setWindowTitle("Copiar texto")
+        self.setWindowTitle(tr("Copiar texto"))
         self.resize(640, 520)
         self.blocks = blocks
         self.xlsx_path = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 16)
         lay.setSpacing(10)
-        title = QLabel("Texto de la zona")
+        title = QLabel(tr("Texto de la zona"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
         self.summary = QLabel("")
@@ -575,7 +571,7 @@ class CopyDialog(QDialog):
             n.setObjectName("Hint")
             n.setWordWrap(True)
             lay.addWidget(n)
-        self.reflow = QCheckBox("Unir las líneas de cada párrafo (quita los saltos de línea del escaneo o de la maquetación)")
+        self.reflow = QCheckBox(tr("Unir las líneas de cada párrafo (quita los saltos de línea del escaneo o de la maquetación)"))
         self.reflow.setChecked(True)
         self.reflow.toggled.connect(self._fill)
         lay.addWidget(self.reflow)
@@ -588,12 +584,12 @@ class CopyDialog(QDialog):
         self.hint.setWordWrap(True)
         lay.addWidget(self.hint)
         btns = QHBoxLayout()
-        self.xlsx_btn = _btn("Tablas a Excel…", "download", "Secondary", icon_color=TEXT)
+        self.xlsx_btn = _btn(tr("Tablas a Excel…"), "download", "Secondary", icon_color=TEXT)
         self.xlsx_btn.clicked.connect(self._export)
         btns.addWidget(self.xlsx_btn)
         btns.addStretch(1)
-        close = _btn("Cerrar", None, "Secondary", icon_color=TEXT)
-        self.copy_btn = _btn("Copiar", "copy", "Primary", icon_color=ICON_DARK)
+        close = _btn(tr("Cerrar"), None, "Secondary", icon_color=TEXT)
+        self.copy_btn = _btn(tr("Copiar"), "copy", "Primary", icon_color=ICON_DARK)
         close.clicked.connect(self.accept)
         self.copy_btn.clicked.connect(self._copy)
         btns.addWidget(close)
@@ -609,49 +605,50 @@ class CopyDialog(QDialog):
         n_r = sum(1 for b in self.blocks if b.kind == "row")
         parts = []
         if n_p:
-            parts.append(f"{n_p} párrafo{'s' if n_p != 1 else ''}")
+            parts.append(f"{n_p} " + tr("párrafo") + ('s' if n_p != 1 else ''))
         if n_t:
-            parts.append(f"{n_t} tabla{'s' if n_t != 1 else ''}")
+            parts.append(f"{n_t} " + tr("tabla") + ('s' if n_t != 1 else ''))
         if n_r:
-            parts.append(f"{n_r} fila{'s' if n_r != 1 else ''} suelta{'s' if n_r != 1 else ''}")
-        self.summary.setText("Se ha reconocido: " + (", ".join(parts) or "nada de texto") + ".")
+            parts.append(f"{n_r} " + tr("fila") + ('s' if n_r != 1 else '') + " " + tr("suelta") + ('s' if n_r != 1 else ''))
+        self.summary.setText(tr("Se ha reconocido: ") + (", ".join(parts) or tr("nada de texto")) + ".")
         self.xlsx_btn.setVisible(n_t > 0)
-        self.hint.setText("Las celdas de tablas y filas van separadas por tabuladores: al pegarlo en Excel o en una tabla "
-                          "de Word cada una cae en su columna." if (n_t or n_r) else "")
+        self.hint.setText(tr("Las celdas de tablas y filas van separadas por tabuladores: al pegarlo en Excel o en una tabla "
+                          "de Word cada una cae en su columna.") if (n_t or n_r) else "")
         self.copy_btn.setEnabled(bool(text.strip()))
 
     def _copy(self):
         QApplication.clipboard().setText(self.edit.toPlainText())
-        self.hint.setText("✓ Copiado al portapapeles.")
+        self.hint.setText(tr("✓ Copiado al portapapeles."))
 
     def _export(self):
         tables = [b.rows for b in self.blocks if b.kind == "table"]
-        dest, _ = QFileDialog.getSaveFileName(self, "Guardar tablas", str(Path.home() / "Downloads" / "tablas.xlsx"),
-                                              "Excel (*.xlsx)")
+        dest, _ = QFileDialog.getSaveFileName(self, tr("Guardar tablas"), str(Path.home() / "Downloads" / "tablas.xlsx"),
+                                              tr("Excel (*.xlsx)"))
         if not dest:
             return
         try:
             ptl.tables_to_xlsx(tables, dest)
             self.xlsx_path = dest
-            self.hint.setText(f"✓ Guardado: {Path(dest).name} ({len(tables)} hoja{'s' if len(tables) != 1 else ''}).")
+            self.hint.setText(tr("✓ Guardado: {name} ({n} hoja{s}).", name=Path(dest).name, n=len(tables),
+                                 s='s' if len(tables) != 1 else ''))
         except Exception as e:
-            self.hint.setText(f"No se pudo guardar: {e}")
+            self.hint.setText(tr("No se pudo guardar: {e}", e=e))
 
 
 class NoteDialog(QDialog):
     def __init__(self, parent, text: str = "", author: str = "", existing: bool = False):
         super().__init__(parent)
-        self.setWindowTitle("Editar nota" if existing else "Nueva nota")
+        self.setWindowTitle(tr("Editar nota") if existing else tr("Nueva nota"))
         self.setMinimumWidth(420)
         self.remove = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        title = QLabel("Editar nota" if existing else "Nueva nota")
+        title = QLabel(tr("Editar nota") if existing else tr("Nueva nota"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
         if author:
-            a = QLabel(f"Autor: {author}")
+            a = QLabel(tr("Autor: {author}", author=author))
             a.setObjectName("Hint")
             lay.addWidget(a)
         self.edit = QTextEdit()
@@ -661,12 +658,12 @@ class NoteDialog(QDialog):
         lay.addWidget(self.edit)
         btns = QHBoxLayout()
         if existing:
-            rm = _btn("Eliminar nota", "trash", "Flat", icon_color=DANGER)
+            rm = _btn(tr("Eliminar nota"), "trash", "Flat", icon_color=DANGER)
             rm.clicked.connect(self._remove)
             btns.addWidget(rm)
         btns.addStretch(1)
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Guardar", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        ok = _btn(tr("Guardar"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self.accept)
         btns.addWidget(cancel)
@@ -736,37 +733,37 @@ class _FieldEditor(QTextEdit):
 
 class FieldDialog(QDialog):
     """Datos de un campo de formulario nuevo."""
-    TYPES = (("text", "Texto (una línea)"), ("multiline", "Texto (varias líneas)"), ("checkbox", "Casilla"),
-             ("combo", "Lista desplegable"), ("list", "Lista de selección"),
-             ("radio", "Botones de opción (elegir uno)"))
+    TYPES = (("text", tr("Texto (una línea)")), ("multiline", tr("Texto (varias líneas)")), ("checkbox", tr("Casilla")),
+             ("combo", tr("Lista desplegable")), ("list", tr("Lista de selección")),
+             ("radio", tr("Botones de opción (elegir uno)")))
 
     def __init__(self, parent, default_name: str):
         super().__init__(parent)
-        self.setWindowTitle("Nuevo campo")
+        self.setWindowTitle(tr("Nuevo campo"))
         self.setMinimumWidth(420)
         self.spec = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        title = QLabel("Nuevo campo de formulario")
+        title = QLabel(tr("Nuevo campo de formulario"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
         self.kind = QComboBox()
         for key, label in self.TYPES:
             self.kind.addItem(label, key)
-        lay.addWidget(QLabel("Tipo de campo"))
+        lay.addWidget(QLabel(tr("Tipo de campo")))
         lay.addWidget(self.kind)
-        lay.addWidget(QLabel("Nombre del campo (así se identifica al exportar los datos)"))
+        lay.addWidget(QLabel(tr("Nombre del campo (así se identifica al exportar los datos)")))
         self.name = QLineEdit(default_name)
         lay.addWidget(self.name)
-        self.opts_lbl = QLabel("Opciones (una por línea)")
+        self.opts_lbl = QLabel(tr("Opciones (una por línea)"))
         self.opts = QTextEdit()
         self.opts.setAcceptRichText(False)
         self.opts.setFixedHeight(90)
-        self.opts.setPlainText("Opción 1\nOpción 2\nOpción 3")
+        self.opts.setPlainText(tr("Opción 1\nOpción 2\nOpción 3"))
         lay.addWidget(self.opts_lbl)
         lay.addWidget(self.opts)
-        self.val_lbl = QLabel("Valor inicial (opcional)")
+        self.val_lbl = QLabel(tr("Valor inicial (opcional)"))
         self.value = QLineEdit()
         lay.addWidget(self.val_lbl)
         lay.addWidget(self.value)
@@ -774,8 +771,8 @@ class FieldDialog(QDialog):
         self._sync()
         btns = QHBoxLayout()
         btns.addStretch(1)
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Crear campo", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        ok = _btn(tr("Crear campo"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self._ok)
         btns.addWidget(cancel)
@@ -787,7 +784,7 @@ class FieldDialog(QDialog):
         lists = k in ("combo", "list", "radio")
         self.opts_lbl.setVisible(lists)
         self.opts.setVisible(lists)
-        self.opts_lbl.setText("Opciones (una por línea, mínimo 2)" if k == "radio" else "Opciones (una por línea)")
+        self.opts_lbl.setText(tr("Opciones (una por línea, mínimo 2)") if k == "radio" else tr("Opciones (una por línea)"))
         self.val_lbl.setVisible(k not in ("checkbox", "radio"))
 
     def _ok(self):
@@ -798,9 +795,9 @@ class FieldDialog(QDialog):
 
 
 # Colores para el texto de un enlace; el primero es el azul de hipervínculo habitual
-LINK_COLORS = (("Azul de hipervínculo", (5 / 255, 99 / 255, 193 / 255)), ("Azul oscuro", (0.1, 0.2, 0.6)),
-               ("Morado (visitado)", (0.4, 0.2, 0.6)), ("Rojo", (0.8, 0.1, 0.1)), ("Verde", (0.1, 0.5, 0.2)),
-               ("Naranja", (0.9, 0.45, 0.05)), ("Negro", (0.1, 0.1, 0.1)))
+LINK_COLORS = ((tr("Azul de hipervínculo"), (5 / 255, 99 / 255, 193 / 255)), (tr("Azul oscuro"), (0.1, 0.2, 0.6)),
+               (tr("Morado (visitado)"), (0.4, 0.2, 0.6)), (tr("Rojo"), (0.8, 0.1, 0.1)), (tr("Verde"), (0.1, 0.5, 0.2)),
+               (tr("Naranja"), (0.9, 0.45, 0.05)), (tr("Negro"), (0.1, 0.1, 0.1)))
 
 
 class LinkDialog(QDialog):
@@ -808,35 +805,35 @@ class LinkDialog(QDialog):
     def __init__(self, parent, n_pages: int, existing: dict | None = None, n_zones: int = 1,
                  allow_underline: bool = True):
         super().__init__(parent)
-        self.setWindowTitle("Editar enlace" if existing else "Nuevo enlace")
+        self.setWindowTitle(tr("Editar enlace") if existing else tr("Nuevo enlace"))
         self.setMinimumWidth(460)
         self.result_dest = None
         self.remove = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(10)
-        title = QLabel("Editar enlace" if existing else "Nuevo enlace")
+        title = QLabel(tr("Editar enlace") if existing else tr("Nuevo enlace"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
-        self.r_web = QRadioButton("Dirección web (o correo electrónico)")
+        self.r_web = QRadioButton(tr("Dirección web (o correo electrónico)"))
         self.url = QLineEdit()
-        self.url.setPlaceholderText("https://ejemplo.com  ·  nombre@correo.com")
-        self.r_page = QRadioButton("Una página de este documento")
+        self.url.setPlaceholderText(tr("https://ejemplo.com  ·  nombre@correo.com"))
+        self.r_page = QRadioButton(tr("Una página de este documento"))
         self.page = QSpinBox()
         self.page.setRange(1, max(n_pages, 1))
-        self.page.setPrefix("Página ")
-        self.page.setSuffix(f" de {n_pages}")
+        self.page.setPrefix(tr("Página "))
+        self.page.setSuffix(tr(" de {n}", n=n_pages))
         lay.addWidget(self.r_web)
         lay.addWidget(self.url)
         lay.addWidget(self.r_page)
         lay.addWidget(self.page)
         self.link_color = LINK_COLORS[0][1]
         style_row = QHBoxLayout()
-        self.underline_cb = QCheckBox("Poner el texto en azul y subrayarlo, como un hipervínculo")
+        self.underline_cb = QCheckBox(tr("Poner el texto en azul y subrayarlo, como un hipervínculo"))
         self.underline_cb.setChecked(existing is None and allow_underline)
         self.color_btn = QPushButton()
         self.color_btn.setObjectName("Secondary")
-        self.color_btn.setToolTip("Color del texto y del subrayado")
+        self.color_btn.setToolTip(tr("Color del texto y del subrayado"))
         self.color_btn.clicked.connect(self._color_menu)
         self._paint_color_btn()
         style_row.addWidget(self.underline_cb, 1)
@@ -846,7 +843,7 @@ class LinkDialog(QDialog):
         self.style_box.setLayout(style_row)
         self.style_box.setVisible(existing is None and allow_underline)
         lay.addWidget(self.style_box)
-        self.note = QLabel("Este enlace ocupa %d zonas (líneas): se editan y se quitan juntas." % n_zones
+        self.note = QLabel(tr("Este enlace ocupa {n} zonas (líneas): se editan y se quitan juntas.", n=n_zones)
                            if n_zones > 1 else "")
         self.note.setObjectName("Hint")
         self.note.setWordWrap(True)
@@ -861,12 +858,12 @@ class LinkDialog(QDialog):
         self.page.valueChanged.connect(lambda: self.r_page.setChecked(True))
         btns = QHBoxLayout()
         if existing:
-            rm = _btn("Quitar enlace", "trash", "Flat", icon_color=DANGER)
+            rm = _btn(tr("Quitar enlace"), "trash", "Flat", icon_color=DANGER)
             rm.clicked.connect(self._remove)
             btns.addWidget(rm)
         btns.addStretch(1)
-        cancel = _btn("Cancelar", None, "Secondary", icon_color=TEXT)
-        ok = _btn("Guardar enlace", "check", "Primary", icon_color=ICON_DARK)
+        cancel = _btn(tr("Cancelar"), None, "Secondary", icon_color=TEXT)
+        ok = _btn(tr("Guardar enlace"), "check", "Primary", icon_color=ICON_DARK)
         cancel.clicked.connect(self.reject)
         ok.clicked.connect(self._ok)
         btns.addWidget(cancel)
@@ -884,7 +881,7 @@ class LinkDialog(QDialog):
         pa.drawEllipse(1, 1, 14, 14)
         pa.end()
         self.color_btn.setIcon(QIcon(pm))
-        self.color_btn.setText("  Color")
+        self.color_btn.setText("  " + tr("Color"))
 
     def _color_menu(self):
         m = QMenu(self)
@@ -893,10 +890,10 @@ class LinkDialog(QDialog):
         m.addSeparator()
 
         def other():
-            c = QColorDialog.getColor(QColor(*(int(v * 255) for v in self.link_color)), self, "Color del enlace")
+            c = QColorDialog.getColor(QColor(*(int(v * 255) for v in self.link_color)), self, tr("Color del enlace"))
             if c.isValid():
                 self._set_color((c.redF(), c.greenF(), c.blueF()))
-        m.addAction("Otro color…", other)
+        m.addAction(tr("Otro color…"), other)
         m.exec(self.color_btn.mapToGlobal(self.color_btn.rect().bottomLeft()))
 
     def _set_color(self, rgb):
@@ -914,8 +911,8 @@ class LinkDialog(QDialog):
             return
         uri = at.normalize_uri(self.url.text())
         if not uri:
-            self.note.setText("Esa dirección no es válida. Usa una web (https://…), un correo o un teléfono; "
-                              "por seguridad no se admiten otros tipos de enlace.")
+            self.note.setText(tr("Esa dirección no es válida. Usa una web (https://…), un correo o un teléfono; "
+                              "por seguridad no se admiten otros tipos de enlace."))
             return
         self.result_dest = {"kind": "uri", "uri": uri}
         self.accept()
@@ -926,17 +923,17 @@ def color_menu(parent, view, fill: bool, apply):
     m = QMenu(parent)
     sw = SelectionBar._swatch
     if fill:
-        m.addAction(sw(None), "Sin relleno", lambda: apply(""))
+        m.addAction(sw(None), tr("Sin relleno"), lambda: apply(""))
     for name, rgb in at.SHAPE_COLORS.items():
         m.addAction(sw(rgb), name.capitalize(), lambda n=name: apply(n))
     m.addSeparator()
 
     def other():
-        c = QColorDialog.getColor(QColor(200, 60, 60), parent, "Elige un color")
+        c = QColorDialog.getColor(QColor(200, 60, 60), parent, tr("Elige un color"))
         if c.isValid():
             apply((c.redF(), c.greenF(), c.blueF()))
-    m.addAction("Otro color…", other)
-    m.addAction("Cuentagotas (tomar de la página)", lambda: view.start_eyedropper(apply))
+    m.addAction(tr("Otro color…"), other)
+    m.addAction(tr("Cuentagotas (tomar de la página)"), lambda: view.start_eyedropper(apply))
     return m
 
 
@@ -947,16 +944,16 @@ def opacity_menu(parent, apply, has_fill: bool = True, current=None):
     """Opacidad: total (trazo y relleno a la vez) y, opcionalmente, solo del trazo o solo del relleno.
     `apply(parte, valor)` con parte = "total" | "stroke" | "fill"."""
     m = QMenu(parent)
-    tot = m.addMenu("Opacidad total")
+    tot = m.addMenu(tr("Opacidad total"))
     for v, label in OPACITIES:
         a = tot.addAction(label, lambda x=v: apply("total", x))
         a.setCheckable(True)
         a.setChecked(bool(current) and abs(current[0] - v) < 0.01 and abs(current[1] - v) < 0.01)
-    st = m.addMenu("Solo el trazo (opcional)")
+    st = m.addMenu(tr("Solo el trazo (opcional)"))
     for v, label in OPACITIES:
         st.addAction(label, lambda x=v: apply("stroke", x))
     if has_fill:
-        fl = m.addMenu("Solo el relleno (opcional)")
+        fl = m.addMenu(tr("Solo el relleno (opcional)"))
         for v, label in OPACITIES:
             fl.addAction(label, lambda x=v: apply("fill", x))
     return m
@@ -976,13 +973,13 @@ class SelectionBar(QFrame):
         lay = QHBoxLayout(self)
         lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(2)
-        self.stroke_btn = QPushButton(); self.stroke_btn.setToolTip("Color del borde")
-        self.fill_btn = QPushButton(); self.fill_btn.setToolTip("Color de relleno")
-        self.width_btn = QPushButton(); self.width_btn.setToolTip("Grosor")
-        self.op_btn = QPushButton(); self.op_btn.setToolTip("Opacidad del relleno")
-        self.head_btn = QPushButton(); self.head_btn.setToolTip("Forma de la punta de la flecha")
-        self.dup_btn = _btn("", "copy", None, icon_color=TEXT, size=16); self.dup_btn.setToolTip("Duplicar (Ctrl+D)")
-        self.del_btn = _btn("", "trash", None, icon_color=TEXT, size=16); self.del_btn.setToolTip("Borrar (Supr)")
+        self.stroke_btn = QPushButton(); self.stroke_btn.setToolTip(tr("Color del borde"))
+        self.fill_btn = QPushButton(); self.fill_btn.setToolTip(tr("Color de relleno"))
+        self.width_btn = QPushButton(); self.width_btn.setToolTip(tr("Grosor"))
+        self.op_btn = QPushButton(); self.op_btn.setToolTip(tr("Opacidad del relleno"))
+        self.head_btn = QPushButton(); self.head_btn.setToolTip(tr("Forma de la punta de la flecha"))
+        self.dup_btn = _btn("", "copy", None, icon_color=TEXT, size=16); self.dup_btn.setToolTip(tr("Duplicar (Ctrl+D)"))
+        self.del_btn = _btn("", "trash", None, icon_color=TEXT, size=16); self.del_btn.setToolTip(tr("Borrar (Supr)"))
         for b in (self.stroke_btn, self.fill_btn, self.op_btn, self.width_btn, self.head_btn, self.dup_btn, self.del_btn):
             lay.addWidget(b)
             b.setCursor(Qt.PointingHandCursor)
@@ -1035,25 +1032,25 @@ class SelectionBar(QFrame):
 
     def _width_menu(self):
         m = QMenu(self)
-        for w, label in ((1.0, "Fino"), (2.0, "Normal"), (4.0, "Grueso"), (7.0, "Muy grueso")):
+        for w, label in ((1.0, tr("Fino")), (2.0, tr("Normal")), (4.0, tr("Grueso")), (7.0, tr("Muy grueso"))):
             m.addAction(label, lambda v=w: self.view.restyle_selection(width=v))
         m.exec(self.width_btn.mapToGlobal(self.width_btn.rect().bottomLeft()))
 
     def refresh(self, d: dict):
         self.stroke_btn.setIcon(self._swatch(d.get("stroke") or (0.1, 0.1, 0.1)))
-        self.stroke_btn.setText(" Borde")
+        self.stroke_btn.setText(" " + tr("Borde"))
         can_fill = d["kind"] in ("rect", "ellipse", "poly")
         self.fill_btn.setVisible(can_fill)
         if can_fill:
             self.fill_btn.setIcon(self._swatch(d.get("fill")))
-            self.fill_btn.setText(" Relleno")
-        self.width_btn.setText("Grosor")
+            self.fill_btn.setText(" " + tr("Relleno"))
+        self.width_btn.setText(tr("Grosor"))
         s = d.get("opacity", 1.0) if d.get("opacity", 1.0) >= 0 else 1.0
         f = d.get("fill_opacity", s)
         self.op_btn.setVisible(True)
-        self.op_btn.setText("Opacidad %d %%" % round(s * 100) if (not (can_fill and d.get("fill")) or abs(s - f) < 0.01)
-                            else "Opacidad %d/%d %%" % (round(s * 100), round(f * 100)))
-        self.op_btn.setToolTip("Opacidad total; dentro puedes dar otra solo al trazo o solo al relleno")
+        self.op_btn.setText(tr("Opacidad {p} %", p=round(s * 100)) if (not (can_fill and d.get("fill")) or abs(s - f) < 0.01)
+                            else tr("Opacidad {p1}/{p2} %", p1=round(s * 100), p2=round(f * 100)))
+        self.op_btn.setToolTip(tr("Opacidad total; dentro puedes dar otra solo al trazo o solo al relleno"))
         self.head_btn.setVisible(d["kind"] == "arrow")
-        self.head_btn.setText("Punta")
+        self.head_btn.setText(tr("Punta"))
         self.adjustSize()

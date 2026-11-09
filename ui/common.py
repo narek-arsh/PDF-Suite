@@ -1,29 +1,11 @@
 # -*- coding: utf-8 -*-
 """Utilidades compartidas de la interfaz: botones, hilos, sombras y logo."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
-from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
-)
+from PySide6.QtCore import Qt, QSize, QRectF, Signal, QThread, QObject
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor
+from PySide6.QtWidgets import QPushButton, QMessageBox, QGraphicsDropShadowEffect
 
 try:
     from PySide6.QtSvg import QSvgRenderer
@@ -33,24 +15,12 @@ except ImportError:
 
 import backend as be
 import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
 import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import TEXT, ON_ACCENT
+from i18n import tr
 
 
-ICON_DARK = "#1C1409"   # para iconos sobre fondo de acento (botones Primary)
+ICON_DARK = ON_ACCENT   # para iconos sobre fondo de acento (botones Primary); se adapta al modo claro/oscuro
 
 
 def _btn(text: str, icon_name: str | None = None, object_name: str | None = None,
@@ -138,6 +108,18 @@ def add_shadow(widget, blur=24, dy=6, alpha=90):
     return effect
 
 
+def glow(widget, color: str, blur: int = 36, alpha: int = 140):
+    """Halo de color (sin desplazamiento) para dar relieve a logos y botones destacados."""
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, 0)
+    c = QColor(color)
+    c.setAlpha(alpha)
+    effect.setColor(c)
+    widget.setGraphicsEffect(effect)
+    return effect
+
+
 class _ToolJob(QThread):
     """Ejecuta una operación pesada fuera del hilo de la ventana."""
     finished_ok = Signal(object)
@@ -154,11 +136,35 @@ class _ToolJob(QThread):
         except ptl.ToolError as e:
             self.failed.emit(str(e))
         except Exception as e:                                  # fallo inesperado: se cuenta, no se traga
-            self.failed.emit(f"Ha ocurrido un error inesperado: {e}")
+            self.failed.emit(tr("Ha ocurrido un error inesperado: {e}", e=e))
 
 
 def _human_size(n: int) -> str:
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
+
+
+def ask_scope(parent, win, current_name: str | None = None):
+    """'all' | 'one' | None (cancelado). Solo pregunta si hay más de un archivo subido; con uno o ninguno,
+    devuelve 'one' sin preguntar nada."""
+    n = len(win.uploaded_files)
+    if n <= 1:
+        return "one"
+    box = QMessageBox(parent)
+    box.setIcon(QMessageBox.Question)
+    box.setWindowTitle(tr("¿A qué archivos?"))
+    box.setText(tr("Tienes {n} archivos subidos. ¿Aplicar esto a todos o solo al elegido ahora"
+               "{current}?", n=n, current=(' (' + current_name + ')') if current_name else ''))
+    all_btn = box.addButton(tr("A todos"), QMessageBox.AcceptRole)
+    one_btn = box.addButton(tr("Solo a este"), QMessageBox.AcceptRole)
+    box.addButton(tr("Cancelar"), QMessageBox.RejectRole)
+    box.setDefaultButton(one_btn)
+    box.exec()
+    clicked = box.clickedButton()
+    if clicked is all_btn:
+        return "all"
+    if clicked is one_btn:
+        return "one"
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════════

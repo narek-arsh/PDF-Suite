@@ -1,28 +1,42 @@
 # -*- coding: utf-8 -*-
 """Vista del editor de páginas (lienzo con texto, anotaciones, formularios y firmas)."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
+from PySide6.QtCore import Qt, QSize, QRectF, QTimer, QEvent, QPoint, QPointF, Signal
 from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
+    QPixmap,
+    QIcon,
+    QPainter,
+    QColor,
+    QFont,
+    QFontMetrics,
+    QPen,
+    QBrush,
+    QCursor,
+    QFontDatabase,
+    QTextBlockFormat,
+    QTextCursor,
+    QTextCharFormat,
+    QTextFormat,
+    QPainterPath,
 )
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QListWidgetItem,
+    QFrame,
+    QSpinBox,
+    QDialog,
+    QAbstractItemView,
+    QGraphicsDropShadowEffect,
+    QMenu,
+    QTextEdit,
+    QGraphicsView,
+    QGraphicsScene,
+    QGraphicsItem,
+    QColorDialog,
+    QGridLayout,
 )
 
 try:
@@ -34,20 +48,11 @@ except ImportError:
 import backend as be
 import icons as ic
 import winfonts
-import fontmanager as fm
 import annot_tools as at
-import signature_pad as sp
 import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
-import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
 import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER_STRONG
+from i18n import tr
 from ui.common import ICON_DARK
 from ui.editor_parts import (
     HeaderFooterDialog,
@@ -77,7 +82,7 @@ class GutterPlusItem(QGraphicsItem):
         self.at_idx, self.cb, self._hover = at_idx, callback, False
         self.setAcceptHoverEvents(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Insertar una página aquí")
+        self.setToolTip(tr("Insertar una página aquí"))
 
     def boundingRect(self):
         return QRectF(-1, -1, self.D + 2, self.D + 2)
@@ -124,10 +129,10 @@ class PageBarItem(QGraphicsItem):
         bw = 28 if compact else 38
         if not last:
             x = 24.0 if compact else 34.0             # sitio para el número de página
-            acts = [("delete", "", "trash", "Borrar esta página")]
+            acts = [("delete", "", "trash", tr("Borrar esta página"))]
             if not compact:
-                acts += [("zoomin", "+", None, "Acercar"), ("zoomout", "−", None, "Alejar")]
-            acts += [("rotl", "", "rot_left", "Girar a la izquierda"), ("rotr", "", "rot_right", "Girar a la derecha")]
+                acts += [("zoomin", "+", None, tr("Acercar")), ("zoomout", "−", None, tr("Alejar"))]
+            acts += [("rotl", "", "rot_left", tr("Girar a la izquierda")), ("rotr", "", "rot_right", tr("Girar a la derecha"))]
             for act, txt, icon, tip in acts:
                 self._btns.append((QRectF(x, 0, bw, self.H), act, txt, icon, tip))
                 x += bw
@@ -135,8 +140,8 @@ class PageBarItem(QGraphicsItem):
         if compact:
             self.width_ = x - 6                          # en la vista general «insertar» va entre páginas
         else:
-            self._btns.append((QRectF(x, 0, 150, self.H), "insert", "Insertar página aquí", "plus",
-                               "Insertar una página aquí"))
+            self._btns.append((QRectF(x, 0, 150, self.H), "insert", tr("Insertar página aquí"), "plus",
+                               tr("Insertar una página aquí")))
             self.width_ = x + 150
 
     def boundingRect(self):
@@ -445,9 +450,9 @@ class PageEditorView(QGraphicsView):
                 self._attach_ghost_clear()
                 self.set_mode("edit")
                 if self._on_notice:
-                    self._on_notice("Archivo adjuntado (el clip). Clic en el clip para guardar una copia o quitarlo.")
+                    self._on_notice(tr("Archivo adjuntado (el clip). Clic en el clip para guardar una copia o quitarlo."))
         elif self._on_notice:
-            self._on_notice("Elige antes el archivo: Notas → Adjuntar archivo…")
+            self._on_notice(tr("Elige antes el archivo: Notas → Adjuntar archivo…"))
 
     def apply_note(self, page_idx: int, pt, existing, text: str, author: str, remove: bool = False) -> bool:
         if self._on_before_mutate:
@@ -548,7 +553,7 @@ class PageEditorView(QGraphicsView):
                 it = self.scene_.addRect(self._img_scene_rect(pi, w["rect"]), QPen(QColor(70, 140, 255), 1.2, Qt.DashLine),
                                          QBrush(QColor(70, 140, 255, 28)))
                 it.setZValue(40)
-                it.setToolTip(f"{ft.KIND_LABELS.get(w['kind'], 'Campo')}: {w['name']}")
+                it.setToolTip(f"{ft.KIND_LABELS.get(w['kind'], tr('Campo'))}: {w['name']}")
                 self._fm_items.append(it)
 
     def _fm_hit(self, page_idx: int, pt: tuple):
@@ -649,7 +654,7 @@ class PageEditorView(QGraphicsView):
     def _fm_activate(self, page_idx: int, w: dict, scene_pos: QPointF):
         if w["readonly"]:
             if self._on_notice:
-                self._on_notice("Este campo es de solo lectura.")
+                self._on_notice(tr("Este campo es de solo lectura."))
             return
         k = w["kind"]
         if k == "text":
@@ -668,9 +673,9 @@ class PageEditorView(QGraphicsView):
                 act.triggered.connect(lambda _=False, v=c: self._fm_set(page_idx, w["xref"], v))
             m.exec(self.viewport().mapToGlobal(self.mapFromScene(scene_pos)))
         elif k == "signature" and self._on_notice:
-            self._on_notice("Para firmar, usa el botón Firma.")
+            self._on_notice(tr("Para firmar, usa el botón Firma."))
         elif self._on_notice:
-            self._on_notice("Este botón no se puede rellenar.")
+            self._on_notice(tr("Este botón no se puede rellenar."))
 
     def _fm_handle_at(self, scene_pos: QPointF):
         sel = self._fm_sel
@@ -773,11 +778,11 @@ class PageEditorView(QGraphicsView):
             if box[2] - box[0] >= 10 and box[3] - box[1] >= 8:
                 self.field_requested.emit(d["page"], box)
             elif self._on_notice:
-                self._on_notice("Arrastra un recuadro más grande para crear el campo.")
+                self._on_notice(tr("Arrastra un recuadro más grande para crear el campo."))
         elif not d["hit"]:
             self._fm_select(None, None)
             if self._on_notice:
-                self._on_notice("Haz clic en un campo para rellenarlo, o arrastra un recuadro para crear uno nuevo.")
+                self._on_notice(tr("Haz clic en un campo para rellenarlo, o arrastra un recuadro para crear uno nuevo."))
 
     def show_candidates(self, found):
         """Marca en verde los campos que se podrían crear (o los quita con None)."""
@@ -958,7 +963,7 @@ class PageEditorView(QGraphicsView):
         self._mk_clear_preview()
         if existing is None and not boxes:
             if self._on_notice:
-                self._on_notice("Arrastra sobre el texto o el área, o haz clic sobre una imagen o dibujo, para convertirlo en enlace.")
+                self._on_notice(tr("Arrastra sobre el texto o el área, o haz clic sobre una imagen o dibujo, para convertirlo en enlace."))
             return
         self.link_requested.emit(page_idx, boxes, existing)
 
@@ -1080,7 +1085,7 @@ class PageEditorView(QGraphicsView):
             if pimg:
                 self._img_select({"page": page_idx, "xref": None, "rect": pimg["bbox"], "pdf": True})
                 if self._on_notice:
-                    self._on_notice("Imagen del PDF seleccionada: pulsa Supr para quitarla de esta página.")
+                    self._on_notice(tr("Imagen del PDF seleccionada: pulsa Supr para quitarla de esta página."))
             else:
                 self._img_select(None)
 
@@ -1300,9 +1305,9 @@ class PageEditorView(QGraphicsView):
             hit = at.editable_at(self.doc, pi, self._mk_pdf_point(sp_, pi)) if pi is not None else None
             if hit and hit["kind"] == "ink":
                 menu = QMenu(self)
-                menu.addAction(ic.icon("signature", TEXT, 16), "Guardar como firma…",
+                menu.addAction(ic.icon("signature", TEXT, 16), tr("Guardar como firma…"),
                                lambda: self.save_signature_requested.emit(hit))
-                menu.addAction(ic.icon("trash", TEXT, 16), "Eliminar este dibujo",
+                menu.addAction(ic.icon("trash", TEXT, 16), tr("Eliminar este dibujo"),
                                lambda: (self._ss_select(pi, hit), self.delete_selection()))
                 menu.exec(e.globalPos())
                 e.accept()
@@ -1315,15 +1320,15 @@ class PageEditorView(QGraphicsView):
                 word = self._word_at(item.page_idx, pt)
                 whole = " ".join(str(item.span.get("text", "")).split())
                 menu = QMenu(self)
-                a_edit = menu.addAction(ic.icon("pencil", TEXT, 16), "Editar este texto")
+                a_edit = menu.addAction(ic.icon("pencil", TEXT, 16), tr("Editar este texto"))
                 a_edit.triggered.connect(lambda _=False, it=item: self._open_inline_editor(it))
                 menu.addSeparator()
                 if word:
-                    menu.addAction(ic.icon("swap", TEXT, 16), f"Reemplazar «{word}»…").triggered.connect(
+                    menu.addAction(ic.icon("swap", TEXT, 16), tr("Reemplazar «{w}»…", w=word)).triggered.connect(
                         lambda _=False, w=word: self.replace_requested.emit(w))
                 if whole and whole != word:
                     shown = whole if len(whole) <= 36 else whole[:34] + "…"
-                    menu.addAction(ic.icon("swap", TEXT, 16), f"Reemplazar «{shown}»…").triggered.connect(
+                    menu.addAction(ic.icon("swap", TEXT, 16), tr("Reemplazar «{w}»…", w=shown)).triggered.connect(
                         lambda _=False, w=whole: self.replace_requested.emit(w))
                 menu.exec(e.globalPos())
                 e.accept()
@@ -1334,27 +1339,27 @@ class PageEditorView(QGraphicsView):
             w = self._fm_hit(pi, self._mk_pdf_point(sp_, pi)) if pi is not None else None
             if w:
                 m = QMenu(self)
-                m.addAction("Rellenar / cambiar", lambda: self._fm_activate(pi, w, sp_))
-                m.addAction("Eliminar campo «%s»" % w["name"], lambda: self.delete_field(pi, w["xref"]))
+                m.addAction(tr("Rellenar / cambiar"), lambda: self._fm_activate(pi, w, sp_))
+                m.addAction(tr("Eliminar campo «{n}»", n=w["name"]), lambda: self.delete_field(pi, w["xref"]))
                 m.exec(e.globalPos())
             e.accept()
             return
         if self.mode == "image" and self._img_sel:
             m = QMenu(self)
             if self._img_sel.get("icon"):
-                m.addAction("Cambiar de icono…", self.icon_picker_requested.emit)
-                m.addAction("Girar 15° a la izquierda\t[", lambda: self.rotate_selected_icon(-15))
-                m.addAction("Girar 15° a la derecha\t]", lambda: self.rotate_selected_icon(15))
+                m.addAction(tr("Cambiar de icono…"), self.icon_picker_requested.emit)
+                m.addAction(tr("Girar 15° a la izquierda") + "\t[", lambda: self.rotate_selected_icon(-15))
+                m.addAction(tr("Girar 15° a la derecha") + "\t]", lambda: self.rotate_selected_icon(15))
                 m.addSeparator()
-            m.addAction("Duplicar	Ctrl+D", self.duplicate_selected_image)
-            m.addAction("Eliminar	Supr", self.delete_selected_image)
+            m.addAction(tr("Duplicar") + "	Ctrl+D", self.duplicate_selected_image)
+            m.addAction(tr("Eliminar") + "	Supr", self.delete_selected_image)
             m.exec(e.globalPos())
             e.accept()
             return
         if self.mode == "shape" and self._ss_sel:
             m = QMenu(self)
-            m.addAction("Duplicar\tCtrl+D", self.duplicate_selection)
-            m.addAction("Eliminar\tSupr", self.delete_selection)
+            m.addAction(tr("Duplicar") + "\tCtrl+D", self.duplicate_selection)
+            m.addAction(tr("Eliminar") + "\tSupr", self.delete_selection)
             m.exec(e.globalPos())
             e.accept()
             return
@@ -1860,7 +1865,7 @@ class PageEditorView(QGraphicsView):
         if self.markup_kind == "erase":
             if not at.remove_markup_at(self.doc, page_idx, pt, dry=True):
                 if self._on_notice:
-                    self._on_notice("No hay ninguna marca ahí.")
+                    self._on_notice(tr("No hay ninguna marca ahí."))
                 return
             if self._on_before_mutate:
                 self._on_before_mutate()
@@ -1903,7 +1908,7 @@ class PageEditorView(QGraphicsView):
         self._mk_clear_preview()
         if not rects:
             if self._on_notice:
-                self._on_notice("Arrastra sobre el texto que quieras marcar.")
+                self._on_notice(tr("Arrastra sobre el texto que quieras marcar."))
             return
         if self._on_before_mutate:
             self._on_before_mutate()
@@ -2005,7 +2010,7 @@ class PageEditorView(QGraphicsView):
                 self.fit_width()
                 self.scroll_to_page(i)
                 if self._on_notice:
-                    self._on_notice("Vista general: has acercado la página %d para poder editarla." % (i + 1))
+                    self._on_notice(tr("Vista general: has acercado la página {n} para poder editarla.", n=i + 1))
                 return
 
     def _add_page_bar(self, idx: int, top: float, page_w: float, max_w: float, last: bool = False, px: float = 0.0):
@@ -2109,7 +2114,7 @@ class PageEditorView(QGraphicsView):
         self._eyedrop = callback
         self.viewport().setCursor(Qt.CrossCursor)
         if self._on_notice:
-            self._on_notice("Cuentagotas: haz clic en cualquier punto de la página para tomar su color.")
+            self._on_notice(tr("Cuentagotas: haz clic en cualquier punto de la página para tomar su color."))
 
     def _eyedrop_pick(self, e):
         cb, self._eyedrop = self._eyedrop, None
@@ -2300,8 +2305,8 @@ class PageEditorView(QGraphicsView):
         idx = self._page_index(y)
         if self._is_rotated(idx):
             if not quiet and self._on_notice:
-                self._on_notice("Esta página está girada: para editarla, vuelve a girarla a su posición original "
-                                "(botones de giro sobre la página).")
+                self._on_notice(tr("Esta página está girada: para editarla, vuelve a girarla a su posición original "
+                                "(botones de giro sobre la página)."))
             return None
         return idx
 
@@ -2484,7 +2489,7 @@ class PageEditorView(QGraphicsView):
         if sel:
             menu.addSeparator()
             shown = sel if len(sel) <= 32 else sel[:30] + "…"
-            act = menu.addAction(ic.icon("swap", TEXT, 16), f"Reemplazar «{shown}»…")
+            act = menu.addAction(ic.icon("swap", TEXT, 16), tr("Reemplazar «{w}»…", w=shown))
             act.triggered.connect(lambda _=False, s=sel: self.replace_requested.emit(s))
         menu.exec(ed.mapToGlobal(pos))
 
@@ -2661,20 +2666,20 @@ class PageEditorView(QGraphicsView):
             s.setFixedSize(1, 20)
             return s
 
-        self._tb_font = dropdown(button("Fuente", width=134))
+        self._tb_font = dropdown(button(tr("Fuente"), width=134))
         self._tb_font.clicked.connect(self._open_font_popup)
-        self._tb_size = dropdown(button("Tamaño del texto", width=58))
+        self._tb_size = dropdown(button(tr("Tamaño del texto"), width=58))
         self._tb_size.clicked.connect(self._open_size_popup)
-        self._tb_bold = button("Negrita", "bold", True, 32)
+        self._tb_bold = button(tr("Negrita"), "bold", True, 32)
         self._tb_bold.toggled.connect(lambda on: self._set_fmt("bold", on))
-        self._tb_italic = button("Cursiva", "italic", True, 32)
+        self._tb_italic = button(tr("Cursiva"), "italic", True, 32)
         self._tb_italic.toggled.connect(lambda on: self._set_fmt("italic", on))
-        self._tb_color = button("Color del texto", width=52)
+        self._tb_color = button(tr("Color del texto"), width=52)
         self._tb_color.setIconSize(QSize(34, 16))
         self._tb_color.clicked.connect(self._open_color_popup)
-        trash = button("Borrar este texto", "trash", width=32)
+        trash = button(tr("Borrar este texto"), "trash", width=32)
         trash.clicked.connect(self._delete_text)
-        plus = button("Añadir un elemento debajo (con su etiqueta o viñeta, y renumera los siguientes)",
+        plus = button(tr("Añadir un elemento debajo (con su etiqueta o viñeta, y renumera los siguientes)"),
                       "clip", width=32)
         plus.clicked.connect(self._insert_below)
         plus.setVisible(not self.manual and not self._editing_item.span.get("new"))
@@ -2752,7 +2757,7 @@ class PageEditorView(QGraphicsView):
 
         def build(pop):
             search = QLineEdit()
-            search.setPlaceholderText("Buscar fuente…")
+            search.setPlaceholderText(tr("Buscar fuente…"))
             lst = _popup_list(250, 300)
             families = QFontDatabase.families()
             for fam in families:
@@ -2788,11 +2793,11 @@ class PageEditorView(QGraphicsView):
             colors = [f"#{original:06x}"] + palette
             for i, hexc in enumerate(colors):
                 b = _Swatch(hexc, QColor(hexc).rgb() & 0xFFFFFF == current)
-                b.setToolTip("Color original" if i == 0 else hexc)
+                b.setToolTip(tr("Color original") if i == 0 else hexc)
                 b.clicked.connect(lambda _=False, h=hexc: self._choose(
                     pop, "color", QColor(h).rgb() & 0xFFFFFF))
                 grid.addWidget(b, i // 6, i % 6)
-            more = QPushButton("Otro color…")
+            more = QPushButton(tr("Otro color…"))
             more.setFocusPolicy(Qt.NoFocus)
             more.clicked.connect(lambda: (pop.close(), self._pick_color()))
             pop.lay.addLayout(grid)
@@ -2843,7 +2848,7 @@ class PageEditorView(QGraphicsView):
         if self._editor is None:
             return
         self._dialog_open = True
-        col = QColorDialog.getColor(QColor.fromRgb(self._current_style()["color"]), self, "Color del texto")
+        col = QColorDialog.getColor(QColor.fromRgb(self._current_style()["color"]), self, tr("Color del texto"))
         self._dialog_open = False
         if self._editor is None:
             return
@@ -2898,10 +2903,10 @@ class PageEditorView(QGraphicsView):
         if self._on_before_mutate:
             self._on_before_mutate()
         pages_before = len(self.doc)
-        res = be.insert_item_below(self.doc, page_idx, cand[0], "Novo elemento", settings=self.hf)
+        res = be.insert_item_below(self.doc, page_idx, cand[0], tr("Novo elemento"), settings=self.hf)
         if not res["ok"]:
             if self._on_notice:
-                self._on_notice("No se pudo añadir el elemento.")
+                self._on_notice(tr("No se pudo añadir el elemento."))
             return
         self._on_dirty()
         if len(self.doc) != pages_before:
@@ -2989,9 +2994,9 @@ class PageEditorView(QGraphicsView):
                     self.doc, item.page_idx, para, new_text, para["size"], para["color"],
                     runs=[dict(r) for r in runs])
                 if added and not self.ask_header_footer(
-                        item.page_idx, "Este texto no cabe en la página y se creará una nueva. "
+                        item.page_idx, tr("Este texto no cabe en la página y se creará una nueva. "
                         "Marca la cabecera y el pie para no tocarlos y decide cómo se repiten. "
-                        "Si cancelas, el cambio se descarta."):
+                        "Si cancelas, el cambio se descarta.")):
                     return
             if self._on_before_mutate:
                 self._on_before_mutate()
@@ -3005,8 +3010,8 @@ class PageEditorView(QGraphicsView):
                     self._on_font_missing(res["family"])
                 spilled = [p + 1 for p in res["pages"] if p != item.page_idx]
                 if spilled and self._on_notice:
-                    self._on_notice("El texto que no cabía pasó a la página " +
-                                    ", ".join(str(p) for p in spilled) + ".")
+                    self._on_notice(tr("El texto que no cabía pasó a la página {pages}.",
+                                        pages=", ".join(str(p) for p in spilled)))
                 if len(self.doc) != pages_before:
                     self.reload_preserving_scroll()          # se añadió alguna página
                 else:

@@ -3,7 +3,7 @@
 siguiente línea en vez de forzar un ancho mínimo gigante (como hace
 QHBoxLayout cuando no caben todos los botones)."""
 from PySide6.QtCore import QPoint, QRect, QSize, Qt
-from PySide6.QtWidgets import QLayout, QSizePolicy
+from PySide6.QtWidgets import QLayout
 
 
 class FlowLayout(QLayout):

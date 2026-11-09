@@ -549,6 +549,16 @@ def _copy(p, s):
     p.drawRoundedRect(QRectF(s * 0.12, s * 0.30, s * 0.58, s * 0.62), s * 0.07, s * 0.07)
 
 
+def _moon(p, s):
+    """Media luna (modo claro/oscuro): un círculo al que se le resta otro círculo desplazado."""
+    path = QPainterPath()
+    path.addEllipse(QRectF(s * 0.14, s * 0.10, s * 0.72, s * 0.72))
+    cut = QPainterPath()
+    cut.addEllipse(QRectF(s * 0.32, s * 0.03, s * 0.72, s * 0.72))
+    _fill(p)
+    p.drawPath(path.subtracted(cut))
+
+
 _DRAWERS = {
     "copy": _copy, "wrench": _wrench, "stamp": _stamp, "note": _note, "form": _form, "signature": _signature, "image": _image, "pen": _pen, "shapes": _shapes, "highlight": _highlight, "underline": _underline, "strike": _strike, "eraser": _eraser,
     "link": _link, "grid": _grid, "printer": _printer, "droplet": _droplet,
@@ -559,4 +569,5 @@ _DRAWERS = {
     "trash": _trash, "clip": _clip, "bold": _bold, "italic": _italic, "chevron_down": _chevron_down,
     "document": _document, "resize": _resize, "crop": _crop, "nup": _nup,
     "bolt": _bolt, "play": _play, "plus": _plus, "text_t": _text_t, "text_add": _text_add, "rot_left": _rot_left, "rot_right": _rot_right, "select": _select, "rect": _rect, "ellipse": _ellipse, "line": _line, "arrow": _arrow,
+    "moon": _moon,
 }

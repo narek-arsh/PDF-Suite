@@ -150,7 +150,19 @@ def unlock(path: str, password: str = "") -> dict:
 
 # ── Marca de agua ─────────────────────────────────────────────────────────
 WM_COLORS = {"Gris": (0.5, 0.5, 0.5), "Rojo": (0.8, 0.1, 0.1), "Azul": (0.1, 0.3, 0.8), "Negro": (0, 0, 0),
-             "Verde": (0.1, 0.55, 0.25)}
+             "Verde": (0.1, 0.55, 0.25), "Naranja": (0.9, 0.5, 0.1), "Amarillo": (0.85, 0.75, 0.1),
+             "Rosa": (0.9, 0.4, 0.65), "Morado": (0.5, 0.25, 0.75)}
+
+
+def _resolve_wm_color(color):
+    """Acepta un nombre de WM_COLORS, un «#rrggbb» o una tupla (r, g, b) en 0..1."""
+    if color is None:
+        return WM_COLORS["Gris"]
+    if isinstance(color, str):
+        if color.startswith("#") and len(color) == 7:
+            return tuple(int(color[i:i + 2], 16) / 255.0 for i in (1, 3, 5))
+        return WM_COLORS.get(color, WM_COLORS["Gris"])
+    return tuple(float(v) for v in color)
 
 
 def parse_pages(spec: str, n: int) -> list:
@@ -188,53 +200,59 @@ def _wm_font():
     return None
 
 
-def watermark(path: str, text: str = "", image: str = "", opacity: float = 0.25, angle: float = 45.0,
-              size: float = 0.0, color: str = "Gris", pages: str = "", tile: bool = False,
-              password: str = "") -> str:
-    """Marca de agua de texto o imagen en las páginas elegidas. size=0: automático (ocupa ~70 % del ancho).
-    El texto se pinta con transparencia y queda detrás del contenido, para no tapar nada."""
+def _apply_watermark(doc, text: str = "", image: str = "", opacity: float = 0.25, angle: float = 45.0,
+                      size: float = 0.0, color="Gris", pages: str = "", tile: bool = False):
+    """Pinta la marca de agua en `doc` (ya abierto), sin guardar nada. size=0: automático (ocupa ~70 % del ancho)."""
     text = (text or "").strip()
     if not text and not image:
         raise ToolError("Escribe el texto de la marca de agua o elige una imagen.")
-    doc = _open(path, password)
-    try:
-        idx = parse_pages(pages, len(doc))
-        if not idx:
-            raise ToolError("Esas páginas no existen en este documento.")
-        col = WM_COLORS.get(color, WM_COLORS["Gris"])
-        fontfile = _wm_font()
-        fname = f"wm{abs(hash(fontfile or 'helv')) % 10 ** 6}"
-        for i in idx:
-            page = doc[i]
-            r = page.rect
-            if image:
-                iw, ih = fitz.Pixmap(image).width, fitz.Pixmap(image).height
-                w = r.width * 0.6
-                h = w * ih / max(iw, 1)
-                centers = [fitz.Point(r.width / 2, r.height / 2)]
-                if tile:
-                    centers = [fitz.Point(x, y) for y in (r.height * 0.2, r.height * 0.5, r.height * 0.8)
-                               for x in (r.width * 0.25, r.width * 0.75)]
-                    w, h = r.width * 0.3, r.width * 0.3 * ih / max(iw, 1)
-                for c in centers:
-                    box = fitz.Rect(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2)
-                    _stamp_image_alpha(doc, page, box, image, opacity, angle)
-                continue
-            font = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font("helv")
-            ca, sa = abs(math.cos(math.radians(angle))), abs(math.sin(math.radians(angle)))
-            span_w = 0.34 if tile else 0.86                      # fracción de la página que puede ocupar
-            lmax = min(r.width * span_w / max(ca, 0.12), r.height * (0.3 if tile else 0.86) / max(sa, 0.12))
-            fs = size or max(10.0, min(140.0, 100.0 * lmax / max(font.text_length(text, fontsize=100), 1)))
-            tw_w = font.text_length(text, fontsize=fs)
+    idx = parse_pages(pages, len(doc))
+    if not idx:
+        raise ToolError("Esas páginas no existen en este documento.")
+    col = _resolve_wm_color(color)
+    fontfile = _wm_font()
+    fname = f"wm{abs(hash(fontfile or 'helv')) % 10 ** 6}"
+    for i in idx:
+        page = doc[i]
+        r = page.rect
+        if image:
+            iw, ih = fitz.Pixmap(image).width, fitz.Pixmap(image).height
+            w = r.width * 0.6
+            h = w * ih / max(iw, 1)
             centers = [fitz.Point(r.width / 2, r.height / 2)]
             if tile:
-                centers = [fitz.Point(x, y) for y in (r.height * 0.18, r.height * 0.5, r.height * 0.82)
-                           for x in (r.width * 0.27, r.width * 0.73)]
+                centers = [fitz.Point(x, y) for y in (r.height * 0.2, r.height * 0.5, r.height * 0.8)
+                           for x in (r.width * 0.25, r.width * 0.75)]
+                w, h = r.width * 0.3, r.width * 0.3 * ih / max(iw, 1)
             for c in centers:
-                origin = fitz.Point(c.x - tw_w / 2, c.y + fs * 0.3)
-                morph = (c, fitz.Matrix(-angle)) if angle else None
-                page.insert_text(origin, text, fontsize=fs, fontname=fname, fontfile=fontfile, color=col,
-                                 fill_opacity=opacity, stroke_opacity=opacity, overlay=False, morph=morph)
+                box = fitz.Rect(c.x - w / 2, c.y - h / 2, c.x + w / 2, c.y + h / 2)
+                _stamp_image_alpha(doc, page, box, image, opacity, angle)
+            continue
+        font = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font("helv")
+        ca, sa = abs(math.cos(math.radians(angle))), abs(math.sin(math.radians(angle)))
+        span_w = 0.34 if tile else 0.86                      # fracción de la página que puede ocupar
+        lmax = min(r.width * span_w / max(ca, 0.12), r.height * (0.3 if tile else 0.86) / max(sa, 0.12))
+        fs = size or max(10.0, min(140.0, 100.0 * lmax / max(font.text_length(text, fontsize=100), 1)))
+        tw_w = font.text_length(text, fontsize=fs)
+        centers = [fitz.Point(r.width / 2, r.height / 2)]
+        if tile:
+            centers = [fitz.Point(x, y) for y in (r.height * 0.18, r.height * 0.5, r.height * 0.82)
+                       for x in (r.width * 0.27, r.width * 0.73)]
+        for c in centers:
+            origin = fitz.Point(c.x - tw_w / 2, c.y + fs * 0.3)
+            morph = (c, fitz.Matrix(-angle)) if angle else None
+            page.insert_text(origin, text, fontsize=fs, fontname=fname, fontfile=fontfile, color=col,
+                             fill_opacity=opacity, stroke_opacity=opacity, overlay=False, morph=morph)
+
+
+def watermark(path: str, text: str = "", image: str = "", opacity: float = 0.25, angle: float = 45.0,
+              size: float = 0.0, color="Gris", pages: str = "", tile: bool = False, password: str = "") -> str:
+    """Marca de agua de texto o imagen en las páginas elegidas, guardada como PDF nuevo. size=0: automático.
+    El texto se pinta con transparencia y queda detrás del contenido, para no tapar nada."""
+    doc = _open(path, password)
+    try:
+        _apply_watermark(doc, text=text, image=image, opacity=opacity, angle=angle, size=size, color=color,
+                          pages=pages, tile=tile)
         dest = out_path(path, "_marca")
         doc.save(str(dest), garbage=3, deflate=True)
     finally:
@@ -262,6 +280,232 @@ def _stamp_image_alpha(doc, page, box, image_path, opacity, angle):
     w = box.width
     rect = fitz.Rect(cx - w / 2, cy - w * ratio / 2, cx + w / 2, cy + w * ratio / 2)
     page.insert_image(rect, stream=buf.getvalue(), overlay=False, keep_proportion=True)
+
+
+# ── Numerar páginas ────────────────────────────────────────────────────────
+PN_POSITIONS = ("Abajo centro", "Abajo izquierda", "Abajo derecha",
+                "Arriba centro", "Arriba izquierda", "Arriba derecha")
+PN_FORMATS = ("{n}", "Página {n}", "Página {n} de {total}", "{n} / {total}", "- {n} -")
+
+
+def _apply_page_numbers(doc, start: int = 1, fmt: str = "{n}", position: str = "Abajo centro",
+                         size: float = 11.0, color="Negro", margin: float = 26.0, pages: str = ""):
+    """Escribe el número en las páginas elegidas de `doc` (ya abierto), sin guardar nada. El primer número de
+    `pages` recibe `start`; el resto sigue contando de uno en uno, aunque haya páginas sin numerar entre medias."""
+    idx = parse_pages(pages, len(doc))
+    if not idx:
+        raise ToolError("Esas páginas no existen en este documento.")
+    col = _resolve_wm_color(color)
+    fontfile = _wm_font()
+    font = fitz.Font(fontfile=fontfile) if fontfile else fitz.Font("helv")
+    fname = f"pn{abs(hash(fontfile or 'helv')) % 10 ** 6}"
+    total = start + len(idx) - 1
+    top = position.startswith("Arriba")
+    left = position.endswith("izquierda")
+    right = position.endswith("derecha")
+    for n, i in enumerate(idx, start=start):
+        page = doc[i]
+        r = page.rect
+        label = fmt.replace("{total}", str(total)).replace("{n}", str(n))
+        tw = font.text_length(label, fontsize=size)
+        y = margin + size * 0.8 if top else r.height - margin
+        x = margin if left else (r.width - margin - tw if right else (r.width - tw) / 2)
+        page.insert_text(fitz.Point(x, y), label, fontsize=size, fontname=fname, fontfile=fontfile,
+                         color=col, overlay=True)
+
+
+def number_pages(path: str, start: int = 1, fmt: str = "{n}", position: str = "Abajo centro", size: float = 11.0,
+                  color="Negro", margin: float = 26.0, pages: str = "", password: str = "") -> dict:
+    """Añade el número de página a las páginas elegidas, guardado como PDF nuevo."""
+    doc = _open(path, password)
+    try:
+        idx_len = len(parse_pages(pages, len(doc)))
+        _apply_page_numbers(doc, start=start, fmt=fmt, position=position, size=size, color=color,
+                            margin=margin, pages=pages)
+        dest = out_path(path, "_numerado")
+        doc.save(str(dest), garbage=3, deflate=True)
+    finally:
+        doc.close()
+    return {"out": str(dest), "n": idx_len}
+
+
+# ── Invertir colores (modo oscuro) ──────────────────────────────────────────
+INVERT_BACKGROUNDS = {"Negro": (0.0, 0.0, 0.0), "Gris oscuro": (0.12, 0.12, 0.12)}
+
+_NUM = rb'-?\d*\.?\d+'
+_CMYK_COLOR_RE = re.compile(rb'(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(k|K)\b')
+_RGB_COLOR_RE = re.compile(rb'(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(rg|RG)\b')
+_GRAY_COLOR_RE = re.compile(rb'(' + _NUM + rb')\s+(g|G)\b')
+_SCN4_RE = re.compile(rb'(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(scn|SCN)\b')
+_SCN3_RE = re.compile(rb'(' + _NUM + rb')\s+(' + _NUM + rb')\s+(' + _NUM + rb')\s+(scn|SCN)\b')
+_SCN1_RE = re.compile(rb'(' + _NUM + rb')\s+(scn|SCN)\b')
+
+
+def _fmt_num(v: float) -> bytes:
+    v = max(0.0, min(1.0, v))
+    s = f"{v:.4f}".rstrip("0").rstrip(".")
+    return (s or "0").encode()
+
+
+def _invert_n(n: int):
+    def sub(m):
+        return b" ".join(_fmt_num(1 - float(m.group(i))) for i in range(1, n + 1)) + b" " + m.group(n + 1)
+    return sub
+
+
+def _invert_content_colors(data: bytes) -> bytes:
+    """Invierte (255 − valor, en cada canal) los colores de relleno/trazo de texto y gráficos vectoriales de un
+    flujo de contenido ya limpiado (`page.clean_contents()`). No toca las imágenes (son objetos aparte, pintados
+    con `Do`, no un color de relleno) ni los patrones/sombreados con nombre (p. ej. `/P1 scn`): esos se dejan tal
+    cual, por ser muy poco frecuentes y arriesgado tocarlos a ciegas."""
+    data = _CMYK_COLOR_RE.sub(_invert_n(4), data)
+    data = _RGB_COLOR_RE.sub(_invert_n(3), data)
+    data = _GRAY_COLOR_RE.sub(_invert_n(1), data)
+    data = _SCN4_RE.sub(_invert_n(4), data)
+    data = _SCN3_RE.sub(_invert_n(3), data)
+    data = _SCN1_RE.sub(_invert_n(1), data)
+    return data
+
+
+def _page_luminosity(page) -> float:
+    """Brillo medio aproximado de la página, de 0 (negro) a 1 (blanco)."""
+    pix = page.get_pixmap(matrix=fitz.Matrix(0.15, 0.15), colorspace=fitz.csGRAY, alpha=False)
+    data = pix.samples
+    return sum(data) / (len(data) * 255) if data else 1.0
+
+
+def _invert_image_xref(page, xref: int):
+    """Invierte los colores de una imagen (255 − valor en cada canal), dejando su transparencia tal cual."""
+    from PIL import Image, ImageOps
+    import io
+    pix = fitz.Pixmap(page.parent, xref)
+    if pix.colorspace is None or pix.colorspace.n not in (1, 3):
+        pix = fitz.Pixmap(fitz.csRGB, pix)
+    if pix.alpha:
+        rgb = fitz.Pixmap(pix, 0)
+        img = Image.frombytes("RGB", (rgb.width, rgb.height), rgb.samples)
+        alpha_img = Image.frombytes("L", (pix.width, pix.height), pix.samples[pix.n - 1::pix.n])
+    else:
+        img = Image.frombytes("RGB" if pix.n == 3 else "L", (pix.width, pix.height), pix.samples)
+        alpha_img = None
+    inv = ImageOps.invert(img.convert("RGB"))
+    if alpha_img is not None:
+        inv.putalpha(alpha_img)
+    buf = io.BytesIO()
+    inv.save(buf, "PNG")
+    page.replace_image(xref, pixmap=fitz.Pixmap(buf.getvalue()))
+
+
+def _apply_invert(doc, mode: str = "smart", background: str = "Negro", keep_dark_pages: bool = True,
+                  pages: str = "") -> int:
+    """Pasa a modo oscuro las páginas elegidas de `doc` (ya abierto), sin guardar nada. Devuelve cuántas tocó."""
+    if mode not in ("smart", "full"):
+        raise ToolError("Modo no válido.")
+    idx = parse_pages(pages, len(doc))
+    if not idx:
+        raise ToolError("Esas páginas no existen en este documento.")
+    bg = INVERT_BACKGROUNDS.get(background, INVERT_BACKGROUNDS["Negro"])
+    dark = {i: _page_luminosity(doc[i]) < 0.35 for i in idx} if keep_dark_pages else {}
+    all_dark = bool(dark) and all(dark.values())
+    done_images = set()
+    n = 0
+    for i in idx:
+        if keep_dark_pages and dark.get(i) and not all_dark:
+            continue
+        page = doc[i]
+        page.clean_contents()
+        data = _invert_content_colors(page.read_contents())
+        doc.update_stream(page.get_contents()[0], data)
+        page.draw_rect(page.rect, color=None, fill=bg, overlay=False)
+        if mode == "full":
+            for im in page.get_images(full=True):
+                if im[0] in done_images:
+                    continue
+                done_images.add(im[0])
+                try:
+                    _invert_image_xref(page, im[0])
+                except Exception:
+                    pass
+        n += 1
+    return n
+
+
+def invert_colors(path: str, mode: str = "smart", background: str = "Negro", keep_dark_pages: bool = True,
+                  pages: str = "", password: str = "") -> dict:
+    """Pasa el PDF a modo oscuro, guardado como PDF nuevo. mode='smart' («Oscuro, conservar colores»): invierte
+    el texto y los gráficos vectoriales, deja las fotos tal cual. mode='full' («Invertir todos los colores»):
+    además invierte las fotos, como un negativo. En los dos casos el texto sigue siendo texto de verdad: se puede
+    buscar y copiar igual que antes. Con keep_dark_pages, las páginas que ya son mayormente oscuras no se tocan
+    (salvo que lo sean todas)."""
+    doc = _open(path, password)
+    try:
+        n = _apply_invert(doc, mode=mode, background=background, keep_dark_pages=keep_dark_pages, pages=pages)
+        dest = out_path(path, "_oscuro")
+        doc.save(str(dest), garbage=3, deflate=True)
+        return {"out": str(dest), "n": n, "n_total": len(parse_pages(pages, len(doc)))}
+    finally:
+        doc.close()
+
+
+# ── Comparar PDFs ────────────────────────────────────────────────────────
+def _diff_image(pix_a, pix_b, dest: Path):
+    """Imagen con las diferencias resaltadas en rojo sobre una mezcla en gris de ambas páginas. Devuelve además
+    la fracción de píxeles que cambian (0 = idénticas)."""
+    from PIL import Image, ImageChops
+    ia = Image.frombytes("RGB", (pix_a.width, pix_a.height), pix_a.samples)
+    ib = Image.frombytes("RGB", (pix_b.width, pix_b.height), pix_b.samples)
+    if ib.size != ia.size:
+        ib = ib.resize(ia.size)
+    ga, gb = ia.convert("L"), ib.convert("L")
+    diff = ImageChops.difference(ga, gb)
+    changed = sum(diff.histogram()[28:])
+    ratio = changed / max(ia.width * ia.height, 1)
+    base = Image.blend(ga, gb, 0.5).convert("RGB")
+    mask = diff.point(lambda v: 255 if v > 28 else 0)
+    red = Image.new("RGB", ia.size, (224, 70, 70))
+    Image.composite(red, base, mask).save(dest)
+    return ratio
+
+
+def compare_pdfs(path_a: str, path_b: str, password_a: str = "", password_b: str = "", dpi: int = 110) -> dict:
+    """Compara dos PDFs página a página (texto y aspecto visual). Por cada página: 'igual', 'diferente',
+    'añadida' (solo está en B) o 'quitada' (solo está en A); si es diferente, se guarda una imagen con lo que
+    cambia resaltado en rojo. No modifica ninguno de los dos archivos."""
+    doc_a = _open(path_a, password_a)
+    try:
+        doc_b = _open(path_b, password_b)
+        try:
+            na, nb = len(doc_a), len(doc_b)
+            work_dir = Path(tempfile.mkdtemp(prefix="pdfm_cmp_"))
+            zoom = dpi / 72.0
+            pages = []
+            counts = {"igual": 0, "diferente": 0, "añadida": 0, "quitada": 0}
+            for i in range(max(na, nb)):
+                has_a, has_b = i < na, i < nb
+                if not has_a or not has_b:
+                    status = "añadida" if has_b else "quitada"
+                    counts[status] += 1
+                    pages.append({"index": i, "status": status, "similarity": 0.0, "diff_image": "",
+                                  "text_a": doc_a[i].get_text() if has_a else "",
+                                  "text_b": doc_b[i].get_text() if has_b else ""})
+                    continue
+                pa, pb = doc_a[i], doc_b[i]
+                ta, tb = pa.get_text(), pb.get_text()
+                pixa = pa.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                pixb = pb.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
+                diff_path = work_dir / f"p{i}.png"
+                ratio = _diff_image(pixa, pixb, diff_path)
+                same = ratio < 0.003 and ta.strip() == tb.strip()
+                status = "igual" if same else "diferente"
+                counts[status] += 1
+                pages.append({"index": i, "status": status, "similarity": round(1 - ratio, 4),
+                              "diff_image": "" if same else str(diff_path), "text_a": ta, "text_b": tb})
+            return {"pages": pages, "n_a": na, "n_b": nb, "work_dir": str(work_dir),
+                    "identical": counts["diferente"] == counts["añadida"] == counts["quitada"] == 0, **counts}
+        finally:
+            doc_b.close()
+    finally:
+        doc_a.close()
 
 
 # ── Aplanar ───────────────────────────────────────────────────────────────
@@ -322,6 +566,126 @@ def repair(path: str, password: str = "") -> dict:
         return {"out": str(dest), "was_damaged": True, "pages": n, "readable": n, "engine": "pikepdf"}
     except Exception:
         raise ToolError("No se ha podido reparar: el archivo está demasiado dañado o no es un PDF.")
+
+
+# ── Analizar (información del PDF) ──────────────────────────────────────────
+PERM_LABELS = (
+    (fitz.PDF_PERM_PRINT, "Imprimir"), (fitz.PDF_PERM_PRINT_HQ, "Imprimir en alta calidad"),
+    (fitz.PDF_PERM_COPY, "Copiar texto/imágenes"), (fitz.PDF_PERM_MODIFY, "Modificar el contenido"),
+    (fitz.PDF_PERM_ANNOTATE, "Anotar"), (fitz.PDF_PERM_FORM, "Rellenar formularios"),
+    (fitz.PDF_PERM_ASSEMBLE, "Insertar/quitar/ordenar páginas"), (fitz.PDF_PERM_ACCESSIBILITY, "Accesibilidad"),
+)
+
+
+def _decode_permissions(perm: int) -> list:
+    return [label for flag, label in PERM_LABELS if perm & int(flag)]
+
+
+def inspect_pdf(path: str, password: str = "") -> dict:
+    """Examina el PDF y devuelve sus propiedades, sin modificarlo: versión, páginas (tamaño y orientación),
+    metadatos, cifrado y permisos, fuentes, imágenes, formulario y marcadores."""
+    needed = is_locked(path)
+    doc = fitz.open(path)
+    try:
+        if needed:
+            if not password or not doc.authenticate(password):
+                raise ToolError("Contraseña incorrecta." if password else
+                                "Este PDF necesita su contraseña para abrirse.")
+        meta = doc.metadata or {}
+        n = len(doc)
+        sizes = {}
+        for i in range(n):
+            r = doc[i].rect
+            key = (round(r.width), round(r.height))
+            sizes[key] = sizes.get(key, 0) + 1
+        page_sizes = [{"width": w, "height": h, "n": c,
+                      "orientation": "horizontal" if w > h else "vertical"} for (w, h), c in sizes.items()]
+        fonts, images = {}, {}
+        for i in range(n):
+            for f in doc[i].get_fonts():
+                key = (f[3], f[2])
+                if key not in fonts:
+                    fonts[key] = {"name": f[3], "type": f[2], "embedded": f[1] != "n/a"}
+            for im in doc[i].get_images():
+                key = im[0]
+                if key not in images:
+                    images[key] = {"width": im[2], "height": im[3], "colorspace": im[5] or "?"}
+        toc = doc.get_toc(simple=True)
+        n_widgets = sum(len(list(doc[i].widgets() or [])) for i in range(n)) if doc.is_form_pdf else 0
+        was_encrypted = doc.is_encrypted or _has_encrypt_dict(doc)
+        return {
+            "path": path, "size": os.path.getsize(path), "version": meta.get("format") or "?", "pages": n,
+            "page_sizes": page_sizes, "metadata": {k: v for k, v in meta.items() if k not in ("format", "encryption")},
+            "needs_password": bool(needed), "encrypted": was_encrypted,
+            "permissions": _decode_permissions(doc.permissions) if was_encrypted else [],
+            "fonts": sorted(fonts.values(), key=lambda f: f["name"]),
+            "n_images": len(images), "images": sorted(images.values(), key=lambda im: -im["width"] * im["height"])[:30],
+            "is_form": bool(doc.is_form_pdf), "n_form_fields": n_widgets,
+            "n_bookmarks": len(toc), "bookmarks": [t[1] for t in toc[:30]],
+            "signed": _looks_signed(doc),
+        }
+    finally:
+        doc.close()
+
+
+def _looks_signed(doc) -> bool:
+    """Hay al menos un campo de firma digital (no dice si es válida: para eso, «Verificar firmas»)."""
+    try:
+        for i in range(len(doc)):
+            for w in (doc[i].widgets() or []):
+                if getattr(w, "field_type_string", "") == "Signature":
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def verify_signatures(path: str, password: str = "") -> dict:
+    """Comprueba las firmas digitales de un PDF: quién firmó (según su certificado), cuándo, si la firma es
+    íntegra y si el documento se modificó después de firmarlo. No comprueba la cadena de confianza del
+    certificado (necesitaría la lista de confianza de la UE, que no está incluida): no dice si el firmante es
+    de verdad quien dice ser, ni si la firma es «cualificada» en el sentido legal, solo si el documento está
+    tal cual estaba cuando se firmó."""
+    import logging
+    for name in ("pyhanko_certvalidator", "pyhanko"):
+        logging.getLogger(name).setLevel(logging.CRITICAL)
+    try:
+        from pyhanko.pdf_utils.reader import PdfFileReader
+        from pyhanko.sign.validation import validate_pdf_signature
+    except ImportError:
+        raise ToolError("Falta la librería «pyhanko» para comprobar firmas.")
+    try:
+        with open(path, "rb") as fh:
+            reader = PdfFileReader(fh, strict=False)
+            if reader.encrypt_dict is not None:
+                res = reader.decrypt(password or "")
+                if not res or getattr(res, "value", None) == 0:
+                    raise ToolError("Contraseña incorrecta." if password else
+                                    "Este PDF necesita su contraseña para abrirse.")
+            sigs = list(reader.embedded_signatures)
+            out = []
+            for sig in sigs:
+                try:
+                    status = validate_pdf_signature(sig)
+                except Exception as e:
+                    out.append({"field": sig.field_name, "error": f"No se pudo comprobar: {e}"})
+                    continue
+                cert = status.signing_cert
+                out.append({
+                    "field": sig.field_name,
+                    "signer": cert.subject.human_friendly if cert else "(desconocido)",
+                    "issuer": cert.issuer.human_friendly if cert else "(desconocido)",
+                    "signing_time": str(status.signer_reported_dt) if status.signer_reported_dt else None,
+                    "intact": bool(status.intact),
+                    "crypto_valid": bool(status.valid),
+                    "modified_after": status.modification_level.name if status.modification_level else "UNKNOWN",
+                    "entire_file": status.coverage.name == "ENTIRE_FILE" if status.coverage else False,
+                })
+            return {"path": path, "n": len(sigs), "signatures": out}
+    except ToolError:
+        raise
+    except Exception as e:
+        raise ToolError(f"No se ha podido leer las firmas de este PDF: {e}")
 
 
 # ── Convertir a PDF ───────────────────────────────────────────────────────
@@ -519,6 +883,7 @@ def native_to_pdf(path: str) -> str:
 # La conversión con el propio Word/Excel/PowerPoint (automatización COM) está DESACTIVADA hasta verificarla: en las
 # primeras pruebas fallaba y dejaba procesos de Office abiertos. LibreOffice (línea de comandos) sí está activa.
 OFFICE_COM_ENABLED = False
+LIBREOFFICE_DOWNLOAD_URL = "https://www.libreoffice.org/download/download-libreoffice/"
 
 
 def office_engines() -> dict:
@@ -539,6 +904,72 @@ def office_engines() -> dict:
             found["libreoffice"] = cand
             break
     return found
+
+
+_LO_STABLE_INDEX = "https://download.documentfoundation.org/libreoffice/stable/"
+
+
+def libreoffice_installer_info() -> dict:
+    """Resuelve la última versión estable de LibreOffice para Windows de 64 bits y el tamaño del instalador oficial
+    (sin descargar nada). {"version", "url", "filename", "size"}. ToolError si no se puede comprobar (sin internet,
+    la página ha cambiado de formato…)."""
+    import requests
+    try:
+        r = requests.get(_LO_STABLE_INDEX, timeout=15, headers={"User-Agent": "PDFManager/1.0"})
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise ToolError("No se ha podido comprobar la última versión de LibreOffice (¿sin conexión a internet?).") from e
+    versions = re.findall(r'href="(\d+\.\d+\.\d+)/"', r.text)
+    if not versions:
+        raise ToolError("No se ha podido determinar la última versión de LibreOffice.")
+    version = max(versions, key=lambda v: tuple(int(x) for x in v.split(".")))
+    filename = f"LibreOffice_{version}_Win_x86-64.msi"
+    url = f"{_LO_STABLE_INDEX}{version}/win/x86_64/{filename}"
+    size = None
+    try:
+        h = requests.head(url, timeout=15, allow_redirects=True, headers={"User-Agent": "PDFManager/1.0"})
+        size = int(h.headers.get("Content-Length") or 0) or None
+    except requests.RequestException:
+        pass
+    return {"version": version, "url": url, "filename": filename, "size": size}
+
+
+def download_libreoffice_installer(info: dict, progress=None) -> str:
+    """Descarga el instalador oficial de LibreOffice (el .msi que da `libreoffice_installer_info`) a una carpeta
+    temporal. `progress(bytes_recibidos, bytes_totales)` si se da. Devuelve la ruta local del .msi descargado."""
+    import requests
+    dest_dir = Path(tempfile.mkdtemp(prefix="pdfm_lodl_"))
+    dest = dest_dir / info["filename"]
+    try:
+        r = requests.get(info["url"], stream=True, timeout=60, headers={"User-Agent": "PDFManager/1.0"})
+        r.raise_for_status()
+        total = int(r.headers.get("Content-Length") or info.get("size") or 0)
+        done = 0
+        with open(dest, "wb") as fh:
+            for chunk in r.iter_content(1024 * 256):
+                if not chunk:
+                    continue
+                fh.write(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(done, total)
+    except requests.RequestException as e:
+        dest.unlink(missing_ok=True)
+        raise ToolError("No se ha podido descargar el instalador de LibreOffice. Comprueba tu conexión a internet.") from e
+    if dest.stat().st_size < 50 * 1024 * 1024:
+        dest.unlink(missing_ok=True)
+        raise ToolError("El archivo descargado no parece el instalador de LibreOffice.")
+    return str(dest)
+
+
+def run_installer(path: str):
+    """Abre el instalador descargado con su propia ventana (como si se hiciera doble clic): el usuario completa la
+    instalación él mismo (Siguiente, Instalar, Finalizar), con el control de cuentas de usuario de Windows si hace
+    falta. No instala nada en silencio."""
+    if os.name == "nt":
+        os.startfile(path)
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
 _PS_WORD = r'''
@@ -663,6 +1094,256 @@ def convert_to_pdf(paths: list, page_size: str = "A4") -> list:
         except ToolError as e:
             results.append((p, None, str(e)))
     return results
+
+
+# ── Convertir desde PDF (PDF a otros formatos) ─────────────────────────────
+PDF_EXPORT_FORMATS = ("Imágenes (PNG)", "Imágenes (JPG)", "Texto (.txt)", "HTML", "Word (.docx)")
+
+
+def pdf_to_images(path: str, fmt: str = "png", dpi: int = 150, pages: str = "", password: str = "") -> dict:
+    """Una imagen por página elegida. fmt: 'png' (con transparencia donde la hubiera) o 'jpg'."""
+    from PIL import Image
+    fmt = fmt.lower()
+    ext = "jpg" if fmt in ("jpg", "jpeg") else "png"
+    doc = _open(path, password)
+    try:
+        idx = parse_pages(pages, len(doc))
+        if not idx:
+            raise ToolError("Esas páginas no existen en este documento.")
+        zoom = max(dpi, 36) / 72.0
+        stem = Path(path).stem
+        DOWNLOADS.mkdir(exist_ok=True)
+        files = []
+        for i in idx:
+            pix = doc[i].get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=(ext == "png"))
+            img = Image.frombytes("RGBA" if pix.alpha else "RGB", (pix.width, pix.height), pix.samples)
+            dest = _unique(DOWNLOADS / f"{stem}_pagina_{i + 1}.{ext}")
+            if ext == "jpg":
+                img.convert("RGB").save(dest, "JPEG", quality=92)
+            else:
+                img.save(dest, "PNG")
+            files.append(str(dest))
+        return {"files": files, "n": len(files)}
+    finally:
+        doc.close()
+
+
+def pdf_to_text(path: str, pages: str = "", password: str = "") -> dict:
+    """Todo el texto ya reconocido, en un .txt (salto de página real entre páginas). Si el PDF es un escaneo sin
+    OCR previo, no habrá texto que sacar: hay que pasarlo antes por OCR."""
+    doc = _open(path, password)
+    try:
+        idx = parse_pages(pages, len(doc))
+        if not idx:
+            raise ToolError("Esas páginas no existen en este documento.")
+        parts = [doc[i].get_text().strip() for i in idx]
+        text = "\n\f\n".join(parts)
+        if not text.strip():
+            raise ToolError("Este PDF no tiene texto reconocible (parece un escaneo): pásalo antes por OCR.")
+        dest = out_path(path, "", ext=".txt")
+        dest.write_text(text, encoding="utf-8")
+        return {"out": str(dest), "n": len(idx)}
+    finally:
+        doc.close()
+
+
+def pdf_to_html(path: str, pages: str = "", password: str = "") -> dict:
+    """Una página HTML con el texto de cada página posicionado como en el PDF (estilos en línea)."""
+    doc = _open(path, password)
+    try:
+        idx = parse_pages(pages, len(doc))
+        if not idx:
+            raise ToolError("Esas páginas no existen en este documento.")
+        parts = [f'<section style="position:relative;page-break-after:always;">{doc[i].get_text("html")}</section>'
+                 for i in idx]
+        full = ("<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\"><title>" + html.escape(Path(path).stem) +
+                "</title></head><body>\n" + "\n".join(parts) + "\n</body></html>")
+        dest = out_path(path, "", ext=".html")
+        dest.write_text(full, encoding="utf-8")
+        return {"out": str(dest), "n": len(idx)}
+    finally:
+        doc.close()
+
+
+def _draw_table_guides(doc) -> int:
+    """Para el texto que tiene pinta de tabla pero no tiene líneas dibujadas (columnas alineadas, nada más), añade
+    unas líneas finas en los bordes de fila y columna detectados por `layout_tools`, para que al convertir a Word
+    se reconozca como una tabla real en vez de como texto con tabulaciones. Solo se usa en una copia de trabajo
+    que luego se descarta: no toca el PDF del usuario. Devuelve cuántas tablas ha marcado."""
+    import statistics
+    import layout_tools as lt
+    n = 0
+    for page in doc:
+        words = [(w[0], w[1], w[2], w[3], w[4]) for w in page.get_text("words")]
+        if not words:
+            continue
+        try:
+            blocks = lt.analyze(words)
+        except Exception:
+            continue
+        for b in blocks:
+            if b.kind != "table" or len(b.rows) < 2 or len(b.rows[0]) < 2 or not b.ordered:
+                continue
+            lines = lt.group_lines([(w[0], w[1], w[2], w[3], w[4]) for w in b.ordered])
+            if len(lines) < 2:
+                continue
+            segs = [s for ln in lines for s in lt.split_segments(ln)]
+            if not segs:
+                continue
+            med_h = statistics.median(s.h for s in segs)
+            col_cuts = lt._cuts(segs, lambda s: s.x0, lambda s: s.x1, 0.6 * med_h)
+            if not col_cuts:
+                continue
+            x0, x1 = b.bbox[0] - 3, b.bbox[2] + 3
+            col_bounds = [x0] + col_cuts + [x1]
+            row_ys = sorted((ln.y0, ln.y1) for ln in lines)
+            row_bounds = [row_ys[0][0] - 3]
+            for (_, py1), (ny0, _) in zip(row_ys, row_ys[1:]):
+                row_bounds.append((py1 + ny0) / 2)
+            row_bounds.append(row_ys[-1][1] + 3)
+            for y in row_bounds:
+                page.draw_line(fitz.Point(x0, y), fitz.Point(x1, y), width=0.4)
+            for x in col_bounds:
+                page.draw_line(fitz.Point(x, row_bounds[0]), fitz.Point(x, row_bounds[-1]), width=0.4)
+            n += 1
+    return n
+
+
+_BULLET_RE = re.compile(r"^\s*([•·▪◦➢➤►●○■□])\s+(\S.*)$")
+_NUMBER_RE = re.compile(r"^\s*(\(?\d{1,3}[.)]|\(?[a-zA-Z][.)])\s+(\S.*)$")
+
+
+def _strip_leading(para, marker_len_in_text: int):
+    """Quita los primeros `marker_len_in_text` caracteres del texto del párrafo (la viñeta/número y los espacios
+    que la separan del texto), tocando solo el primer `run` para no perder el formato del resto."""
+    left = marker_len_in_text
+    for run in para.runs:
+        if left <= 0:
+            break
+        if len(run.text) <= left:
+            left -= len(run.text)
+            run.text = ""
+        else:
+            run.text = run.text[left:]
+            left = 0
+
+
+def _improve_word_docx(path: str):
+    """Repasa el .docx recién creado: el tabulador inicial que usa pdf2docx para simular una sangría pasa a ser
+    una sangría de primera línea de verdad, y las líneas que empiezan por viñeta o número pasan a una lista con
+    estilo de Word (para que se puedan añadir o quitar puntos y se numeren solas)."""
+    try:
+        from docx import Document
+        from docx.shared import Pt
+    except Exception:
+        return
+    try:
+        doc = Document(path)
+    except Exception:
+        return
+    changed = False
+    for para in doc.paragraphs:
+        text = para.text
+        if not text.strip() or not para.runs:
+            continue
+        if text.startswith("\t") and text.count("\t") == 1:
+            _strip_leading(para, 1)
+            para.paragraph_format.first_line_indent = Pt(28)
+            changed = True
+            continue
+        m = _BULLET_RE.match(text) or _NUMBER_RE.match(text)
+        if not m:
+            continue
+        _strip_leading(para, len(text) - len(m.group(2)))
+        style_name = "List Bullet" if m.re is _BULLET_RE else "List Number"
+        try:
+            para.style = doc.styles[style_name]
+            para.paragraph_format.left_indent = None
+            para.paragraph_format.first_line_indent = None
+        except KeyError:
+            pass
+        changed = True
+    if changed:
+        doc.save(path)
+
+
+def pdf_to_word(path: str, password: str = "") -> str:
+    """PDF a Word (.docx). Usa pdf2docx (una librería que va sola, sin ningún programa externo); si no estuviera
+    disponible, recurre a LibreOffice si lo hay instalado. Antes de convertir, añade líneas-guía a las tablas sin
+    rejilla que se detectan solo por columnas, y al final ajusta sangrías y listas. Sale editable, pero no es una
+    copia exacta: la maquetación compleja puede no coincidir del todo con el original."""
+    if is_locked(path):
+        raise ToolError("Este PDF tiene contraseña: desbloquéalo primero (en Proteger).")
+    dest = out_path(path, "", ext=".docx")
+    src_for_conversion = path
+    guide_copy = None
+    try:
+        work = fitz.open(path)
+        try:
+            if _draw_table_guides(work):
+                guide_copy = Path(tempfile.mkdtemp(prefix="pdfm_lodoc_")) / "guia.pdf"
+                work.save(str(guide_copy))
+                src_for_conversion = str(guide_copy)
+        finally:
+            work.close()
+    except Exception:
+        pass
+    try:
+        import logging
+        from pdf2docx import Converter
+        root = logging.getLogger()                    # pdf2docx usa logging.info(...) sobre el logger raíz
+        prev_level = root.level
+        root.setLevel(logging.ERROR)
+        try:
+            cv = Converter(src_for_conversion)
+            try:
+                cv.convert(str(dest))
+            finally:
+                cv.close()
+        finally:
+            root.setLevel(prev_level)
+        if dest.exists() and dest.stat().st_size > 0:
+            _improve_word_docx(str(dest))
+            return str(dest)
+    except ImportError:
+        pass
+    except Exception:
+        dest.unlink(missing_ok=True)
+    finally:
+        if guide_copy:
+            shutil.rmtree(guide_copy.parent, ignore_errors=True)
+    eng = office_engines()
+    if not eng.get("libreoffice"):
+        raise ToolError("No se ha podido convertir este PDF a Word.")
+    tmp = tempfile.mkdtemp(prefix="pdfm_lo_")
+    try:
+        subprocess.run([eng["libreoffice"], "--headless", "--norestore", "--convert-to", "docx", "--outdir", tmp,
+                        str(Path(path).resolve())], capture_output=True, timeout=240,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        made = Path(tmp) / (Path(path).stem + ".docx")
+        if not made.exists():
+            raise ToolError("No se ha podido convertir este PDF a Word.")
+        shutil.move(str(made), str(dest))
+        return str(dest)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def convert_from_pdf(path: str, fmt: str, dpi: int = 150, pages: str = "", password: str = "") -> dict:
+    """Despacha según el formato elegido (uno de PDF_EXPORT_FORMATS). Devuelve siempre {"files": [...], "n": N}."""
+    if fmt == "Imágenes (PNG)":
+        return pdf_to_images(path, "png", dpi, pages, password)
+    if fmt == "Imágenes (JPG)":
+        return pdf_to_images(path, "jpg", dpi, pages, password)
+    if fmt == "Texto (.txt)":
+        r = pdf_to_text(path, pages, password)
+        return {"files": [r["out"]], "n": r["n"]}
+    if fmt == "HTML":
+        r = pdf_to_html(path, pages, password)
+        return {"files": [r["out"]], "n": r["n"]}
+    if fmt == "Word (.docx)":
+        return {"files": [pdf_to_word(path, password)], "n": 1}
+    raise ToolError(f"No sé exportar a «{fmt}».")
 
 
 # ── OCR ───────────────────────────────────────────────────────────────────

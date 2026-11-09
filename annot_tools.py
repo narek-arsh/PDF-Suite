@@ -138,14 +138,6 @@ def remove_markup_at(doc, page_idx: int, pt: tuple, dry: bool = False) -> bool:
     return False
 
 
-def count_markups(doc, page_idx: int) -> int:
-    try:
-        page = doc[page_idx]
-        return sum(1 for a in (page.annots() or []) if a.type[0] in _TYPES)
-    except Exception:
-        return 0
-
-
 # ── Formas y líneas ───────────────────────────────────────────────────────
 SHAPE_COLORS = {
     "negro": (0.1, 0.1, 0.1), "rojo": (0.9, 0.15, 0.15), "azul": (0.15, 0.4, 0.9), "verde": (0.1, 0.65, 0.3),
@@ -299,16 +291,6 @@ def _shape_hit(annot, pt, tol=5.0, ignore_fill=False) -> bool:
     if filled:
         return True
     return min(abs(pt[0] - r.x0), abs(pt[0] - r.x1), abs(pt[1] - r.y0), abs(pt[1] - r.y1)) <= tol
-
-
-def shape_at(doc, page_idx: int, pt: tuple) -> dict | None:
-    """Descripción de la forma/línea bajo el punto (la de encima si hay varias), o None."""
-    page = doc[page_idx]
-    found = None
-    for annot in (page.annots() or []):
-        if annot.type[0] in _SHAPE_TYPES and _shape_hit(annot, pt):
-            found = describe_shape(annot)
-    return found
 
 
 def describe_shape(annot) -> dict:
@@ -525,15 +507,6 @@ def stamp_at(doc, page_idx: int, pt: tuple) -> dict | None:
     return found
 
 
-def stamp_rect(doc, page_idx: int, xref: int):
-    page = doc[page_idx]
-    for annot in (page.annots() or []):
-        if annot.xref == xref:
-            r = annot.rect
-            return (r.x0, r.y0, r.x1, r.y1)
-    return None
-
-
 def set_stamp_rect(doc, page_idx: int, xref: int, rect) -> bool:
     page = doc[page_idx]
     for annot in (page.annots() or []):
@@ -648,15 +621,6 @@ def delete_link(doc, page_idx: int, link: dict) -> bool:
     except Exception:
         pass
     return False
-
-
-def replace_link(doc, page_idx: int, link: dict, dest: dict) -> bool:
-    """Cambia el destino de un enlace existente (se borra y se vuelve a crear en el mismo sitio)."""
-    if dest["kind"] == "uri" and not normalize_uri(dest["uri"]):
-        return False
-    if not delete_link(doc, page_idx, link):
-        return False
-    return add_link(doc, page_idx, link["rect"], dest)
 
 
 # ── Seleccionar, mover, escalar y duplicar lo dibujado desde el editor ────

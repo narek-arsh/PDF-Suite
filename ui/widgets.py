@@ -1,28 +1,23 @@
 # -*- coding: utf-8 -*-
 """Widgets reutilizables: lista de archivos, zona de soltar, cabecera con «Volver», deslizadores."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QSize, QRect, QTimer
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QFont, QFontMetrics, QPen
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QWidget,
+    QLabel,
+    QHBoxLayout,
+    QVBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QFrame,
+    QSpinBox,
+    QSlider,
+    QAbstractItemView,
+    QMenu,
+    QSizePolicy,
+    QStyle,
+    QStyleOptionSlider,
 )
 
 try:
@@ -33,28 +28,19 @@ except ImportError:
 
 import backend as be
 import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
-import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import BG, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT
+from i18n import tr
 from ui.common import FILE_COLORS, _btn, add_shadow
+
+
+REMOVE_BTN_RECT = QRect(0, 0, 38, 84)   # zona clicable del aspa «quitar», en coordenadas de la tarjeta (margen generoso)
 
 
 def render_file_card(name: str, pages: int, color: str, width: int = 620, height: int = 84,
                      path: str | None = None) -> QPixmap:
     """Pre-renderiza la tarjeta de un archivo como pixmap único: así el
-    drag&drop interno de Qt mueve la tarjeta entera sin glitches."""
+    drag&drop interno de Qt mueve la tarjeta entera sin glitches. A la izquierda de la miniatura lleva un
+    aspa para quitar el archivo sin menú contextual (su zona clicable es REMOVE_BTN_RECT, escalada a `height`)."""
     pix = QPixmap(width, height)
     pix.fill(Qt.transparent)
     p = QPainter(pix)
@@ -67,7 +53,14 @@ def render_file_card(name: str, pages: int, color: str, width: int = 620, height
     p.setBrush(QColor(color))
     p.drawRoundedRect(0, 10, 5, height - 20, 2, 2)
 
-    box = QRect(18, 8, 56, height - 16)
+    close_d = 22
+    close_rect = QRect(10, (height - close_d) // 2, close_d, close_d)
+    p.setBrush(QColor(SURFACE_3))
+    p.drawEllipse(close_rect)
+    close_icon = ic.icon("close", TEXT_SOFT, 12).pixmap(12, 12)
+    p.drawPixmap(close_rect.x() + (close_d - 12) // 2, close_rect.y() + (close_d - 12) // 2, close_icon)
+
+    box = QRect(40, 8, 56, height - 16)
     thumb = None
     png = be.get_page_thumbnail_png(path, 0, width=140) if path else None
     if png:
@@ -86,7 +79,7 @@ def render_file_card(name: str, pages: int, color: str, width: int = 620, height
         doc_icon = ic.icon("document", TEXT, 22).pixmap(22, 22)
         p.drawPixmap(box.x() + (box.width() - 22) // 2, (height - 22) // 2, doc_icon)
 
-    text_x = 90
+    text_x = 112
     text_w = width - text_x - 60
     name_font = QFont("Segoe UI", 11, QFont.DemiBold)
     p.setFont(name_font)
@@ -99,7 +92,7 @@ def render_file_card(name: str, pages: int, color: str, width: int = 620, height
     p.setFont(pages_font)
     p.setPen(QColor(TEXT_SOFT))
     p.drawText(QRect(text_x, 44, text_w, 20), Qt.AlignVCenter | Qt.AlignLeft,
-               f"{pages} pág.")
+               tr("{pages} pág.", pages=pages))
 
     hint_font = QFont("Segoe UI", 8)
     p.setFont(hint_font)
@@ -144,6 +137,16 @@ class FileListWidget(QListWidget):
         self.setIconSize(QSize(620, 84))
         self.setCursor(Qt.OpenHandCursor)
         self.itemDoubleClicked.connect(lambda item: self._on_open(self._resolve(item)))
+
+    def mousePressEvent(self, e):
+        if e.button() == Qt.LeftButton:
+            item = self.itemAt(e.pos())
+            if item is not None:
+                local = e.pos() - self.visualItemRect(item).topLeft()
+                if REMOVE_BTN_RECT.contains(local):
+                    self._on_remove(self._resolve(item))
+                    return
+        super().mousePressEvent(e)
 
     def set_items(self, files: list[dict]):
         vbar = self.verticalScrollBar()
@@ -199,8 +202,8 @@ class FileListWidget(QListWidget):
             return
         f = self._resolve(item)
         menu = QMenu(self)
-        open_act = menu.addAction("Abrir")
-        remove_act = menu.addAction("Quitar archivo")
+        open_act = menu.addAction(tr("Abrir"))
+        remove_act = menu.addAction(tr("Quitar archivo"))
         action = menu.exec(e.globalPos())
         if action == remove_act:
             self._on_remove(f)
@@ -222,7 +225,7 @@ class DropArea(QFrame):
         lay = QVBoxLayout(self)
         icon = QLabel(alignment=Qt.AlignCenter)
         icon.setPixmap(ic.icon("folder", TEXT_SOFT, 34).pixmap(34, 34))
-        txt = QLabel("Arrastra PDFs o fotos aquí (también texto, HTML, Word…)", alignment=Qt.AlignCenter)
+        txt = QLabel(tr("Arrastra PDFs o fotos aquí (también texto, HTML, Word…)"), alignment=Qt.AlignCenter)
         txt.setObjectName("Hint")
         lay.addStretch(1)
         lay.addWidget(icon)
@@ -244,7 +247,7 @@ class BackHeader(QWidget):
         super().__init__()
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 14)
-        back_btn = _btn("Volver", "back", "Flat")
+        back_btn = _btn(tr("Volver"), "back", "Flat")
         back_btn.setCursor(Qt.PointingHandCursor)
         back_btn.clicked.connect(on_back)
         lbl = QLabel(title)
@@ -392,7 +395,7 @@ class PreviewPanel(QFrame):
         self._timer.timeout.connect(self._render)
 
         lay = QVBoxLayout(self)
-        self.caption = QLabel("Vista previa")
+        self.caption = QLabel(tr("Vista previa"))
         self.caption.setObjectName("SectionTitle")
         lay.addWidget(self.caption)
 
@@ -445,7 +448,7 @@ class PreviewPanel(QFrame):
         if not png:
             self._orig = None
             self.img.setPixmap(QPixmap())
-            self.img.setText("No se pudo generar la vista previa")
+            self.img.setText(tr("No se pudo generar la vista previa"))
             return
         pix = QPixmap()
         pix.loadFromData(png)

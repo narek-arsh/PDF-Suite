@@ -1,28 +1,31 @@
 # -*- coding: utf-8 -*-
 """Pantalla Editar: panel lateral y herramientas sobre la vista del editor."""
-import copy
-import shutil
-import time
 import os
 import sys
-import tempfile
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QUrl, QTimer, QPointF, Signal, QThread
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QDesktopServices, QShortcut, QKeySequence
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QWidget,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QVBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QFrame,
+    QComboBox,
+    QCheckBox,
+    QRadioButton,
+    QDialog,
+    QMessageBox,
+    QMenu,
+    QInputDialog,
+    QProgressBar,
 )
 
 try:
@@ -39,15 +42,12 @@ import annot_tools as at
 import signature_pad as sp
 import form_tools as ft
 import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
 import pdf_tools as ptl
 import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
 import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
+from theme import TEXT, ACCENT
 from flow_layout import FlowLayout
+from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
@@ -107,9 +107,10 @@ class _FontDownloadWorker(QThread):
             for family, info, styles in self.jobs:
                 paths = fm.download_family(
                     info, styles, progress=lambda i, n, name, fam=family: self.progress.emit(
-                        f"Descargando «{fam}»: {name} ({i + 1}/{n})" if name else f"«{fam}» descargada"))
+                        tr("Descargando «{fam}»: {name} ({i}/{n})", fam=fam, name=name, i=i + 1, n=n) if name
+                        else tr("«{fam}» descargada", fam=fam)))
                 if self.to_windows:
-                    self.progress.emit(f"Instalando «{family}» en Windows…")
+                    self.progress.emit(tr("Instalando «{family}» en Windows…", family=family))
                     fm.install_in_windows(paths)
                 installed.append(info["family"])
             self.done.emit(installed)
@@ -122,7 +123,7 @@ class FontDownloadDialog(QDialog):
     instalándolas solo en el programa o también en Windows."""
     def __init__(self, groups, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Fuentes que faltan")
+        self.setWindowTitle(tr("Fuentes que faltan"))
         self.resize(640, 520)
         self.groups = groups
         self.rows: dict[str, dict] = {}
@@ -132,12 +133,12 @@ class FontDownloadDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(22, 20, 22, 20)
         lay.setSpacing(12)
-        title = QLabel("Fuentes que faltan")
+        title = QLabel(tr("Fuentes que faltan"))
         title.setStyleSheet(f"font-size:17px; font-weight:600; color:{TEXT};")
         lay.addWidget(title)
-        info = QLabel("Este PDF usa fuentes que no están en tu ordenador. Sin ellas, al editar se usa una "
+        info = QLabel(tr("Este PDF usa fuentes que no están en tu ordenador. Sin ellas, al editar se usa una "
                       "parecida y el texto puede verse algo distinto. Las que publica Google Fonts "
-                      "(licencia libre) se pueden descargar aquí. Las de Microsoft, Adobe o de pago no.")
+                      "(licencia libre) se pueden descargar aquí. Las de Microsoft, Adobe o de pago no."))
         info.setObjectName("Hint")
         info.setWordWrap(True)
         lay.addWidget(info)
@@ -148,19 +149,19 @@ class FontDownloadDialog(QDialog):
         self.list.setTextElideMode(Qt.ElideNone)
         self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         for g in groups:
-            it = QListWidgetItem(f"«{g['family']}» — comprobando en Google Fonts…")
+            it = QListWidgetItem(tr("«{family}» — comprobando en Google Fonts…", family=g['family']))
             it.setFlags(it.flags() & ~Qt.ItemIsUserCheckable)
             self.list.addItem(it)
             self.rows[g["family"]] = {"group": g, "item": it, "info": None, "substitute": None}
         lay.addWidget(self.list, 1)
 
-        self.search_btn = _btn("Buscar la seleccionada en Google Fonts", None, "Flat", icon_color=TEXT)
+        self.search_btn = _btn(tr("Buscar la seleccionada en Google Fonts"), None, "Flat", icon_color=TEXT)
         self.search_btn.clicked.connect(self._search_web)
         lay.addWidget(self.search_btn, 0, Qt.AlignLeft)
 
-        self.opt_app = QRadioButton("Instalar solo en este programa (recomendado: no cambia nada en Windows)")
-        self.opt_win = QRadioButton("Instalar también en Windows (para todos tus programas; solo para tu "
-                                    "usuario, sin permisos de administrador)")
+        self.opt_app = QRadioButton(tr("Instalar solo en este programa (recomendado: no cambia nada en Windows)"))
+        self.opt_win = QRadioButton(tr("Instalar también en Windows (para todos tus programas; solo para tu "
+                                    "usuario, sin permisos de administrador)"))
         self.opt_app.setChecked(True)
         lay.addWidget(self.opt_app)
         lay.addWidget(self.opt_win)
@@ -174,8 +175,8 @@ class FontDownloadDialog(QDialog):
         lay.addWidget(self.bar)
 
         btns = QHBoxLayout()
-        self.close_btn = _btn("Cerrar", None, "Secondary", icon_color=TEXT)
-        self.go_btn = _btn("Descargar e instalar", "download", "Primary", icon_color=ICON_DARK)
+        self.close_btn = _btn(tr("Cerrar"), None, "Secondary", icon_color=TEXT)
+        self.go_btn = _btn(tr("Descargar e instalar"), "download", "Primary", icon_color=ICON_DARK)
         self.go_btn.setEnabled(False)
         self.close_btn.clicked.connect(self.accept)
         self.go_btn.clicked.connect(self._start_download)
@@ -197,24 +198,28 @@ class FontDownloadDialog(QDialog):
         row["info"], row["substitute"] = data["info"], data["substitute"]
         n_styles = len(row["group"]["styles"])
         if data["info"]:
-            it.setText(f"«{family}» — disponible en Google Fonts ({len(data['info']['files'])} estilos)")
+            it.setText(tr("«{family}» — disponible en Google Fonts ({n} estilos)",
+                          family=family, n=len(data['info']['files'])))
         elif data["substitute"]:
-            it.setText(f"«{family}» — de Microsoft; «{data['sub_name']}» (Google Fonts) tiene las mismas medidas")
-            it.setToolTip(f"«{family}» no se puede descargar (es de Microsoft). «{data['sub_name']}» es una "
-                          f"fuente libre con medidas idénticas: el texto ocupa lo mismo y no se descoloca.")
+            it.setText(tr("«{family}» — de Microsoft; «{sub}» (Google Fonts) tiene las mismas medidas",
+                          family=family, sub=data['sub_name']))
+            it.setToolTip(tr("«{family}» no se puede descargar (es de Microsoft). «{sub}» es una "
+                          "fuente libre con medidas idénticas: el texto ocupa lo mismo y no se descoloca.",
+                          family=family, sub=data['sub_name']))
         else:
-            it.setText(f"«{family}» — no está en Google Fonts: se usa «Arial» en su lugar. Si quieres usar «{family}», "
-                       f"instálala en Windows (doble clic en el archivo de la fuente → Instalar) y reabre la aplicación.")
-            it.setToolTip("Suele ser una fuente de pago o del sistema, y no se puede descargar de aquí.")
+            it.setText(tr("«{family}» — no está en Google Fonts: se usa «Arial» en su lugar. Si quieres usar «{family}», "
+                       "instálala en Windows (doble clic en el archivo de la fuente → Instalar) y reabre la aplicación.",
+                       family=family))
+            it.setToolTip(tr("Suele ser una fuente de pago o del sistema, y no se puede descargar de aquí."))
             return
         it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
         it.setCheckState(Qt.Checked)
 
     def _on_lookup_failed(self, msg: str):
-        self.status.setText("No se pudo conectar con Google Fonts. Comprueba tu conexión a internet.")
-        for row in self.rows.values():
+        self.status.setText(tr("No se pudo conectar con Google Fonts. Comprueba tu conexión a internet."))
+        for family, row in self.rows.items():
             if row["info"] is None and row["substitute"] is None:
-                row["item"].setText(row["item"].text().replace("comprobando en Google Fonts…", "sin conexión"))
+                row["item"].setText(tr("«{family}» — sin conexión", family=family))
 
     def _on_lookup_done(self):
         self.bar.setRange(0, 1)
@@ -234,7 +239,7 @@ class FontDownloadDialog(QDialog):
             if r["item"].flags() & Qt.ItemIsUserCheckable and r["item"].checkState() == Qt.Checked:
                 jobs.append((fam, r["info"] or r["substitute"], set(r["group"]["styles"])))
         if not jobs:
-            self.status.setText("Marca al menos una fuente.")
+            self.status.setText(tr("Marca al menos una fuente."))
             return
         self.go_btn.setEnabled(False)
         self.bar.setRange(0, 0)
@@ -249,15 +254,15 @@ class FontDownloadDialog(QDialog):
         self.installed = names
         self.bar.setRange(0, 1)
         self.bar.setValue(1)
-        self.status.setText("Listo: " + ", ".join(f"«{n}»" for n in names) +
-                            " instalada(s). Ya se usarán al editar este PDF.")
-        self.close_btn.setText("  Cerrar")
+        self.status.setText(tr("Listo: {names} instalada(s). Ya se usarán al editar este PDF.",
+                               names=", ".join(f"«{n}»" for n in names)))
+        self.close_btn.setText(tr("  Cerrar"))
 
     def _on_download_failed(self, msg: str):
         self.bar.setRange(0, 1)
         self.bar.setValue(0)
         self.go_btn.setEnabled(True)
-        self.status.setText(f"No se pudo descargar: {msg}")
+        self.status.setText(tr("No se pudo descargar: {msg}", msg=msg))
 
 
 class EditPage(QWidget):
@@ -276,16 +281,16 @@ class EditPage(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(14)
-        root.addWidget(BackHeader("Edit", lambda: win.go_home()))
+        root.addWidget(BackHeader(tr("Edit – Editor visual"), lambda: win.go_home()))
 
-        root.addWidget(QLabel("Archivo:"))
+        root.addWidget(QLabel(tr("Archivo:")))
         self.file_combo = QComboBox()
         self.file_combo.currentIndexChanged.connect(self._on_file_changed)
         root.addWidget(self.file_combo)
 
-        hint = QLabel("Clic sobre cualquier texto de la página para editarlo directamente, "
+        hint = QLabel(tr("Clic sobre cualquier texto de la página para editarlo directamente, "
                        "sobre la propia página. Enter hace una línea nueva, Ctrl+Enter confirma y Esc cancela. Usa la fuente original del "
-                       "PDF si la tienes instalada en Windows; si no, avisa y usa una de respaldo.")
+                       "PDF si la tienes instalada en Windows; si no, avisa y usa una de respaldo."))
         hint.setObjectName("Hint")
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -299,13 +304,13 @@ class EditPage(QWidget):
         fb.setContentsMargins(14, 10, 14, 10)
         self.font_banner_lbl = QLabel()
         self.font_banner_lbl.setWordWrap(True)
-        fb_get = _btn("Descargar fuentes…", "download", "Primary", icon_color=ICON_DARK)
+        fb_get = _btn(tr("Descargar fuentes…"), "download", "Primary", icon_color=ICON_DARK)
         fb_get.clicked.connect(self._open_font_dialog)
-        fb_skip = _btn("Ignorar", None, "Flat", icon_color=TEXT)
+        fb_skip = _btn(tr("Ignorar"), None, "Flat", icon_color=TEXT)
         fb_skip.clicked.connect(self._ignore_fonts)
-        fb_restart = _btn("Reiniciar con este documento", "back", "Secondary", icon_color=TEXT)
-        fb_restart.setToolTip("Cierra y vuelve a abrir la aplicación con este mismo documento y sus cambios, para "
-                              "que reconozca una fuente recién instalada")
+        fb_restart = _btn(tr("Reiniciar con este documento"), "back", "Secondary", icon_color=TEXT)
+        fb_restart.setToolTip(tr("Cierra y vuelve a abrir la aplicación con este mismo documento y sus cambios, para "
+                              "que reconozca una fuente recién instalada"))
         fb_restart.clicked.connect(self._restart_with_doc)
         fb.addWidget(self.font_banner_lbl, 1)
         fb.addWidget(fb_restart)
@@ -331,55 +336,55 @@ class EditPage(QWidget):
         outer.addLayout(tb)
         outer.addWidget(tools_row)
         self.undo_btn = _btn("", "back"); self.undo_btn.setFixedWidth(38)
-        self.undo_btn.setToolTip("Deshacer (Ctrl+Z)")
+        self.undo_btn.setToolTip(tr("Deshacer (Ctrl+Z)"))
         self.undo_btn.setEnabled(False)
         self.undo_btn.clicked.connect(self._do_undo)
         self.redo_btn = _btn("", "forward"); self.redo_btn.setFixedWidth(38)
-        self.redo_btn.setToolTip("Rehacer (Ctrl+Y)")
+        self.redo_btn.setToolTip(tr("Rehacer (Ctrl+Y)"))
         self.redo_btn.setEnabled(False)
         self.redo_btn.clicked.connect(self._do_redo)
         tb.addWidget(self.undo_btn)
         tb.addWidget(self.redo_btn)
         tb.addSpacing(10)
-        self.censor_btn = _btn("Censurar", "lock", "Secondary", icon_color=TEXT)
-        self.censor_btn.setToolTip("Tapar texto con una barra negra")
+        self.censor_btn = _btn(tr("Censurar"), "lock", "Secondary", icon_color=TEXT)
+        self.censor_btn.setToolTip(tr("Tapar texto con una barra negra"))
         self.censor_btn.setCheckable(True)
         self.censor_btn.clicked.connect(lambda: self._toggle_panel("censor"))
-        self.fr_btn = _btn("Reemplazar", "swap", "Secondary", icon_color=TEXT)
-        self.fr_btn.setToolTip("Buscar y reemplazar texto")
+        self.fr_btn = _btn(tr("Reemplazar"), "swap", "Secondary", icon_color=TEXT)
+        self.fr_btn.setToolTip(tr("Buscar y reemplazar texto"))
         self.fr_btn.setCheckable(True)
         self.fr_btn.clicked.connect(lambda: self._toggle_panel("find"))
-        self.edit_btn = _btn("Editar", "pencil", "Secondary", icon_color=TEXT)
+        self.edit_btn = _btn(tr("Editar"), "pencil", "Secondary", icon_color=TEXT)
         self.edit_btn.setCheckable(True)
         self.edit_btn.setChecked(True)
-        self.edit_btn.setToolTip("Editar el texto existente: haz clic sobre un texto y cámbialo")
+        self.edit_btn.setToolTip(tr("Editar el texto existente: haz clic sobre un texto y cámbialo"))
         self.edit_btn.clicked.connect(self._go_edit_mode)
-        self.hf_btn = _btn("Configurar página", "document", "Secondary", icon_color=TEXT)
-        self.hf_btn.setToolTip("Marca qué es cabecera y pie de página y cómo se repiten en páginas nuevas")
+        self.hf_btn = _btn(tr("Configurar página"), "document", "Secondary", icon_color=TEXT)
+        self.hf_btn.setToolTip(tr("Marca qué es cabecera y pie de página y cómo se repiten en páginas nuevas"))
         self.hf_btn.clicked.connect(lambda: self.editor_view.ask_header_footer(self.page_idx))
-        self.text_btn = _btn("Texto", "text_add", "Secondary", icon_color=TEXT)
+        self.text_btn = _btn(tr("Texto"), "text_add", "Secondary", icon_color=TEXT)
         self.text_btn.setCheckable(True)
-        self.text_btn.setToolTip("Añadir texto nuevo: haz clic en cualquier punto de la página y escribe")
+        self.text_btn.setToolTip(tr("Añadir texto nuevo: haz clic en cualquier punto de la página y escribe"))
         self.text_btn.clicked.connect(self._toggle_text_mode)
-        self.manual_btn = _btn("Automático", "bolt", "Secondary", icon_color=TEXT)
+        self.manual_btn = _btn(tr("Automático"), "bolt", "Secondary", icon_color=TEXT)
         self.manual_btn.setCheckable(True)
         self.manual_btn.setToolTip(
-            "Automático: deduce párrafos, listas, cabecera, pie y numeración, y reparte el texto "
-            "entre páginas.\nManual: cada línea se edita por separado y no se mueve nada más.")
+            tr("Automático: deduce párrafos, listas, cabecera, pie y numeración, y reparte el texto "
+            "entre páginas.\nManual: cada línea se edita por separado y no se mueve nada más."))
         self.manual_btn.clicked.connect(self._toggle_manual)
-        self.annot_btn = _btn("Marcar", "highlight", "Secondary", icon_color=TEXT)
+        self.annot_btn = _btn(tr("Marcar"), "highlight", "Secondary", icon_color=TEXT)
         self.annot_btn.setCheckable(True)
-        self.annot_btn.setToolTip("Resaltar, subrayar o tachar texto arrastrando sobre él")
+        self.annot_btn.setToolTip(tr("Resaltar, subrayar o tachar texto arrastrando sobre él"))
         self.annot_menu = QMenu(self.annot_btn)
         self.annot_btn.setMenu(self.annot_menu)
         self.annot_menu.aboutToShow.connect(self._fill_annot_menu)
-        self.shape_btn = _btn("Dibujar", "pen", "Secondary", icon_color=TEXT)
+        self.shape_btn = _btn(tr("Dibujar"), "pen", "Secondary", icon_color=TEXT)
         self.shape_btn.setCheckable(True)
-        self.shape_btn.setToolTip("Dibujo libre (lápiz, rotulador), rectángulos, elipses, líneas y flechas")
+        self.shape_btn.setToolTip(tr("Dibujo libre (lápiz, rotulador), rectángulos, elipses, líneas y flechas"))
         self.shape_btn.clicked.connect(self._toggle_shape_panel)
-        self.image_btn = _btn("Imagen", "image", "Secondary", icon_color=TEXT)
+        self.image_btn = _btn(tr("Imagen"), "image", "Secondary", icon_color=TEXT)
         self.image_btn.setCheckable(True)
-        self.image_btn.setToolTip("Insertar una imagen, o seleccionar, mover y borrar las que ya hay en el PDF")
+        self.image_btn.setToolTip(tr("Insertar una imagen, o seleccionar, mover y borrar las que ya hay en el PDF"))
         self.image_menu = QMenu(self.image_btn)
         self.image_btn.setMenu(self.image_menu)
         self.image_menu.aboutToShow.connect(self._fill_image_menu)
@@ -388,38 +393,38 @@ class EditPage(QWidget):
         tb2.addWidget(self.annot_btn)
         tb2.addWidget(self.image_btn)
         tb2.addWidget(self.shape_btn)
-        self.sign_btn = _btn("Firma", "signature", "Secondary", icon_color=TEXT)
-        self.sign_btn.setToolTip("Firmar: dibuja, escribe o usa una imagen; se guarda para volver a usarla")
+        self.sign_btn = _btn(tr("Firma"), "signature", "Secondary", icon_color=TEXT)
+        self.sign_btn.setToolTip(tr("Firmar: dibuja, escribe o usa una imagen; se guarda para volver a usarla"))
         self.sign_menu = QMenu(self.sign_btn)
         self.sign_btn.setMenu(self.sign_menu)
         self.sign_menu.aboutToShow.connect(self._fill_sign_menu)
-        self.link_btn = _btn("Enlace", "link", "Secondary", icon_color=TEXT)
+        self.link_btn = _btn(tr("Enlace"), "link", "Secondary", icon_color=TEXT)
         self.link_btn.setCheckable(True)
-        self.link_btn.setToolTip("Convertir un texto, un área, una imagen o un dibujo en un enlace; clic en uno existente para editarlo")
+        self.link_btn.setToolTip(tr("Convertir un texto, un área, una imagen o un dibujo en un enlace; clic en uno existente para editarlo"))
         self.link_btn.clicked.connect(self._toggle_link_mode)
         tb2.addWidget(self.sign_btn)
         tb2.addWidget(self.link_btn)
         tb2.addWidget(self.censor_btn)
-        self.form_btn = _btn("Formulario", "form", "Secondary", icon_color=TEXT)
+        self.form_btn = _btn(tr("Formulario"), "form", "Secondary", icon_color=TEXT)
         self.form_btn.setCheckable(True)
-        self.form_btn.setToolTip("Rellenar los campos del PDF, crear campos nuevos o aplanar el formulario")
+        self.form_btn.setToolTip(tr("Rellenar los campos del PDF, crear campos nuevos o aplanar el formulario"))
         self.form_btn.clicked.connect(self._toggle_form_mode)
         tb2.addWidget(self.form_btn)
-        self.notes_btn = _btn("Notas", "note", "Secondary", icon_color=TEXT)
+        self.notes_btn = _btn(tr("Notas"), "note", "Secondary", icon_color=TEXT)
         self.notes_btn.setCheckable(True)
-        self.notes_btn.setToolTip("Notas y comentarios, archivos adjuntos y ocultar las anotaciones")
+        self.notes_btn.setToolTip(tr("Notas y comentarios, archivos adjuntos y ocultar las anotaciones"))
         self.notes_menu = QMenu(self.notes_btn)
         self.notes_btn.setMenu(self.notes_menu)
         self.notes_menu.aboutToShow.connect(self._fill_notes_menu)
         tb2.addWidget(self.notes_btn)
-        self.copy_btn = _btn("Copiar texto", "text_t", "Secondary", icon_color=TEXT)
+        self.copy_btn = _btn(tr("Copiar texto"), "text_t", "Secondary", icon_color=TEXT)
         self.copy_btn.setCheckable(True)
-        self.copy_btn.setToolTip("Copiar texto con sentido: arrastra una zona o haz clic en un párrafo o tabla. "
-                                 "Entiende párrafos, columnas y tablas (también en escaneos)")
+        self.copy_btn.setToolTip(tr("Copiar texto con sentido: arrastra una zona o haz clic en un párrafo o tabla. "
+                                 "Entiende párrafos, columnas y tablas (también en escaneos)"))
         self.copy_btn.clicked.connect(self._toggle_copy_mode)
         tb2.addWidget(self.copy_btn)
-        self.stamp_btn = _btn("Sello", "stamp", "Secondary", icon_color=TEXT)
-        self.stamp_btn.setToolTip("Sello de texto (APROBADO, RECIBIDO…) con fecha y autor")
+        self.stamp_btn = _btn(tr("Sello"), "stamp", "Secondary", icon_color=TEXT)
+        self.stamp_btn.setToolTip(tr("Sello de texto (APROBADO, RECIBIDO…) con fecha y autor"))
         self.stamp_btn.clicked.connect(self._new_stamp)
         tb2.addWidget(self.stamp_btn)
         tb2.addWidget(self.text_btn)
@@ -438,11 +443,11 @@ class EditPage(QWidget):
         tb.addWidget(self.page_lbl)
         tb.addWidget(next_btn)
         tb.addSpacing(10)
-        zo = _btn("−", None); zo.setFixedWidth(34); zo.setToolTip("Alejar (Ctrl y −, o Ctrl + rueda)")
-        zi = _btn("+", None); zi.setFixedWidth(34); zi.setToolTip("Acercar (Ctrl y +, o Ctrl + rueda)")
+        zo = _btn("−", None); zo.setFixedWidth(34); zo.setToolTip(tr("Alejar (Ctrl y −, o Ctrl + rueda)"))
+        zi = _btn("+", None); zi.setFixedWidth(34); zi.setToolTip(tr("Acercar (Ctrl y +, o Ctrl + rueda)"))
         self.zoom_btn = _btn("120 %", None, "Secondary", icon_color=TEXT)
         self.zoom_btn.setFixedWidth(64)
-        self.zoom_btn.setToolTip("Ajustar al ancho de la ventana (Ctrl+0)")
+        self.zoom_btn.setToolTip(tr("Ajustar al ancho de la ventana (Ctrl+0)"))
         zo.clicked.connect(lambda: self.editor_view.zoom_by(1 / 1.2))
         zi.clicked.connect(lambda: self.editor_view.zoom_by(1.2))
         self.zoom_btn.clicked.connect(lambda: self.editor_view.fit_width())
@@ -450,7 +455,7 @@ class EditPage(QWidget):
         tb.addWidget(self.zoom_btn)
         tb.addWidget(zi)
         tb.addSpacing(10)
-        save_btn = _btn("Guardar", "save", "Primary")
+        save_btn = _btn(tr("Guardar"), "save", "Primary")
         save_btn.clicked.connect(self._save_changes)
         tb.addWidget(save_btn)
         root.addWidget(toolbar)
@@ -463,21 +468,21 @@ class EditPage(QWidget):
         self.censor_content = QWidget()
         c1 = QVBoxLayout(self.censor_content)
         c1.setContentsMargins(0, 0, 0, 0)
-        censor_title = QLabel("Censurar")
+        censor_title = QLabel(tr("Censurar"))
         censor_title.setObjectName("SectionTitle")
         c1.addWidget(censor_title)
-        censor_hint = QLabel("Con este panel abierto, clica sobre cualquier fragmento de texto "
+        censor_hint = QLabel(tr("Con este panel abierto, clica sobre cualquier fragmento de texto "
                               "de la página para taparlo al instante, o clica y arrastra sobre "
                               "cualquier área (también fotos o firmas) para censurar justo esa "
                               "zona. También puedes buscar un texto exacto aquí abajo. "
-                              "Esta acción no se puede deshacer.")
+                              "Esta acción no se puede deshacer."))
         censor_hint.setObjectName("Hint")
         censor_hint.setWordWrap(True)
         c1.addWidget(censor_hint)
         censor_row = QHBoxLayout()
         self.censor_field = QLineEdit()
-        self.censor_field.setPlaceholderText("O escribe aquí un texto exacto a censurar")
-        censor_go_btn = _btn("Censurar texto", "lock", "Primary")
+        self.censor_field.setPlaceholderText(tr("O escribe aquí un texto exacto a censurar"))
+        censor_go_btn = _btn(tr("Censurar texto"), "lock", "Primary")
         censor_go_btn.clicked.connect(self._do_censor)
         censor_row.addWidget(self.censor_field, 1)
         censor_row.addWidget(censor_go_btn)
@@ -487,23 +492,23 @@ class EditPage(QWidget):
         self.find_content = QWidget()
         c2 = QVBoxLayout(self.find_content)
         c2.setContentsMargins(0, 0, 0, 0)
-        fr_title = QLabel("Buscar y reemplazar")
+        fr_title = QLabel(tr("Buscar y reemplazar"))
         fr_title.setObjectName("SectionTitle")
         c2.addWidget(fr_title)
         fr_row = QHBoxLayout()
         self.buscar_field = QLineEdit()
-        self.buscar_field.setPlaceholderText("Buscar")
+        self.buscar_field.setPlaceholderText(tr("Buscar"))
         self.reemplazar_field = QLineEdit()
-        self.reemplazar_field.setPlaceholderText("Reemplazar por (vacío = eliminar)")
-        fr_go_btn = _btn("Reemplazar", "swap", "Primary")
+        self.reemplazar_field.setPlaceholderText(tr("Reemplazar por (vacío = eliminar)"))
+        fr_go_btn = _btn(tr("Reemplazar"), "swap", "Primary")
         fr_go_btn.clicked.connect(self._do_find_replace)
         fr_row.addWidget(self.buscar_field, 1)
         fr_row.addWidget(self.reemplazar_field, 1)
         fr_row.addWidget(fr_go_btn)
         c2.addLayout(fr_row)
         fr_opts = QHBoxLayout()
-        self.case_cb = QCheckBox("Distinguir mayúsculas y minúsculas")
-        fr_hint = QLabel("Reemplaza en todo el documento conservando la fuente, el tamaño y el color. Ctrl+Z lo deshace.")
+        self.case_cb = QCheckBox(tr("Distinguir mayúsculas y minúsculas"))
+        fr_hint = QLabel(tr("Reemplaza en todo el documento conservando la fuente, el tamaño y el color. Ctrl+Z lo deshace."))
         fr_hint.setObjectName("Hint")
         fr_opts.addWidget(self.case_cb)
         fr_opts.addWidget(fr_hint, 1)
@@ -593,7 +598,7 @@ class EditPage(QWidget):
         self.editor_view.load_doc(self.doc)
         self._refresh_font_banner()
         if self.doc is not None and ft.has_fields(self.doc):
-            self.win.snack("Este PDF tiene campos de formulario: usa el botón Formulario para rellenarlos.", "info")
+            self.win.snack(tr("Este PDF tiene campos de formulario: usa el botón Formulario para rellenarlos."), "info")
 
     def _before_mutate(self):
         """Llamado justo antes de cualquier cambio (editar texto, censurar)
@@ -634,7 +639,7 @@ class EditPage(QWidget):
             self.dirty = bool(self._undo_stack)
             self._schedule_draft()
             self._update_undo_redo_buttons()
-            self.win.snack("↩ Deshecho", "info")
+            self.win.snack(tr("↩ Deshecho"), "info")
 
     def _do_redo(self):
         if not self._redo_stack or self.editor_view._editor is not None:
@@ -647,7 +652,7 @@ class EditPage(QWidget):
             self.dirty = True
             self._schedule_draft()
             self._update_undo_redo_buttons()
-            self.win.snack("↪ Rehecho", "info")
+            self.win.snack(tr("↪ Rehecho"), "info")
 
     def _update_undo_redo_buttons(self):
         self.undo_btn.setEnabled(bool(self._undo_stack))
@@ -655,7 +660,7 @@ class EditPage(QWidget):
 
     def _on_page_visible(self, idx: int, total: int):
         self.page_idx = idx
-        self.page_lbl.setText(f"Pág. {idx + 1} / {total}" if total else "—")
+        self.page_lbl.setText(tr("Pág. {n} / {total}", n=idx + 1, total=total) if total else "—")
 
     def _prev_page(self):
         if self.doc and self.page_idx > 0:
@@ -698,16 +703,17 @@ class EditPage(QWidget):
         for g in self._missing_fonts:
             fam, st = g["family"], self._font_state.get(g["family"])
             if st == "google":
-                lines.append(f"La fuente «{fam}» no está instalada, pero está en Google Fonts: pulsa «Descargar "
-                             f"fuentes…» para instalarla. Mientras tanto se usa «{fb}».")
+                lines.append(tr("La fuente «{fam}» no está instalada, pero está en Google Fonts: pulsa «Descargar "
+                             "fuentes…» para instalarla. Mientras tanto se usa «{fb}».", fam=fam, fb=fb))
             elif st == "no":
-                lines.append(f"La fuente «{fam}» no está en Google Fonts (suele ser de pago o de otro programa): se está "
-                             f"usando «{fb}» en su lugar. Si quieres usar «{fam}», descárgala e instálala en Windows "
-                             f"(doble clic en el archivo de la fuente → Instalar) y pulsa «Reiniciar con este documento».")
+                lines.append(tr("La fuente «{fam}» no está en Google Fonts (suele ser de pago o de otro programa): se está "
+                             "usando «{fb}» en su lugar. Si quieres usar «{fam}», descárgala e instálala en Windows "
+                             "(doble clic en el archivo de la fuente → Instalar) y pulsa «Reiniciar con este documento».",
+                             fam=fam, fb=fb))
             else:
-                lines.append(f"La fuente «{fam}» no está instalada: se está usando «{fb}» en su lugar. Si quieres usar "
-                             f"«{fam}», instálala en Windows y reabre la aplicación (o mira si está en Google Fonts "
-                             f"con «Descargar fuentes…»).")
+                lines.append(tr("La fuente «{fam}» no está instalada: se está usando «{fb}» en su lugar. Si quieres usar "
+                             "«{fam}», instálala en Windows y reabre la aplicación (o mira si está en Google Fonts "
+                             "con «Descargar fuentes…»).", fam=fam, fb=fb))
         return "\n".join(lines)
 
     def _refresh_font_banner(self):
@@ -748,22 +754,9 @@ class EditPage(QWidget):
             winfonts.refresh_installed_fonts()
             self._refresh_font_banner()
             self.editor_view.reload_preserving_scroll()
-            self.win.snack("Fuentes instaladas: " + ", ".join(dlg.installed), "success")
+            self.win.snack(tr("Fuentes instaladas: {names}", names=", ".join(dlg.installed)), "success")
 
     # ── Páginas, texto libre y modo manual ──────────────────────────────
-    def _fill_pages_menu(self, menu: QMenu):
-        menu.clear()
-        n = self.page_idx + 1
-        menu.addAction("Añadir página al final", lambda: self._add_page(len(self.doc)))
-        menu.addAction(f"Añadir página después de la {n}", lambda: self._add_page(self.page_idx + 1))
-        menu.addAction(f"Añadir página antes de la {n}", lambda: self._add_page(self.page_idx))
-        menu.addSeparator()
-        menu.addAction(f"Girar la página {n} a la derecha", lambda: self._rotate([self.page_idx], 90))
-        menu.addAction(f"Girar la página {n} a la izquierda", lambda: self._rotate([self.page_idx], -90))
-        menu.addAction("Girar todas las páginas a la derecha",
-                       lambda: self._rotate(list(range(len(self.doc))), 90))
-        menu.addSeparator()
-        menu.addAction(f"Borrar la página {n}", self._delete_page)
 
     def _add_page(self, at: int):
         if not self.doc:
@@ -779,10 +772,10 @@ class EditPage(QWidget):
                 self._mark_dirty()
                 ev.reload_preserving_scroll()
                 ev.scroll_to_page(at)
-                self.win.snack(f"{res['count']} página{'s' if res['count'] != 1 else ''} insertada"
-                               f"{'s' if res['count'] != 1 else ''}.", "success")
+                self.win.snack(tr("{n} página{s} insertada{s}.", n=res['count'],
+                                  s='s' if res['count'] != 1 else ''), "success")
             else:
-                self.win.snack("No se pudo insertar ese PDF (¿tiene contraseña?).", "error")
+                self.win.snack(tr("No se pudo insertar ese PDF (¿tiene contraseña?)."), "error")
             return
         self._insert_blank(at, dlg.settings)
 
@@ -790,8 +783,8 @@ class EditPage(QWidget):
         ev = self.editor_view
         if (ev.manual or len(self.doc) < 2) and settings is None and ev.hf is None:
             # Con una sola página (o en modo manual) no se puede deducir cabecera, pie y numeración.
-            if not ev.ask_header_footer(self.page_idx, "Marca la cabecera y el pie de página para "
-                                        "copiarlos a la página nueva y decide cómo se numera."):
+            if not ev.ask_header_footer(self.page_idx, tr("Marca la cabecera y el pie de página para "
+                                        "copiarlos a la página nueva y decide cómo se numera.")):
                 return
             settings = ev.hf
         self._before_mutate()
@@ -800,9 +793,9 @@ class EditPage(QWidget):
             self._mark_dirty()
             ev.reload_preserving_scroll()
             ev.scroll_to_page(at)
-            self.win.snack(f"Página añadida (ahora es la {at + 1}).", "success")
+            self.win.snack(tr("Página añadida (ahora es la {n}).", n=at + 1), "success")
         else:
-            self.win.snack("No se pudo añadir la página.", "error")
+            self.win.snack(tr("No se pudo añadir la página."), "error")
 
     def _rotate(self, idxs: list, delta: int):
         if not self.doc:
@@ -811,21 +804,21 @@ class EditPage(QWidget):
         if be.rotate_pages(self.doc, idxs, delta):
             self._mark_dirty()
             self.editor_view.reload_preserving_scroll()
-            self.win.snack("Página girada. Mientras esté girada no se puede editar su contenido; vuelve a girarla "
-                           "a su posición para hacerlo." if len(idxs) == 1 else "Páginas giradas.", "info")
+            self.win.snack(tr("Página girada. Mientras esté girada no se puede editar su contenido; vuelve a girarla "
+                           "a su posición para hacerlo.") if len(idxs) == 1 else tr("Páginas giradas."), "info")
         else:
-            self.win.snack("No se pudo girar.", "error")
+            self.win.snack(tr("No se pudo girar."), "error")
 
     def _delete_page(self):
         if not self.doc:
             return
         if len(self.doc) < 2:
-            self.win.snack("No se puede borrar la única página del documento.", "error")
+            self.win.snack(tr("No se puede borrar la única página del documento."), "error")
             return
         n = self.page_idx + 1
         if QMessageBox.question(
-                self, "Borrar página", f"¿Borrar la página {n} con todo su contenido?\n"
-                "Las siguientes se renumeran. Puedes deshacerlo con Ctrl+Z.",
+                self, tr("Borrar página"), tr("¿Borrar la página {n} con todo su contenido?\n"
+                "Las siguientes se renumeran. Puedes deshacerlo con Ctrl+Z.", n=n),
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         self._before_mutate()
@@ -834,16 +827,16 @@ class EditPage(QWidget):
             self._mark_dirty()
             self.editor_view.reload_preserving_scroll()
             self.editor_view.scroll_to_page(min(self.page_idx, len(self.doc) - 1))
-            self.win.snack(f"Página {n} borrada.", "success")
+            self.win.snack(tr("Página {n} borrada.", n=n), "success")
         else:
-            self.win.snack("No se pudo borrar la página.", "error")
+            self.win.snack(tr("No se pudo borrar la página."), "error")
 
     def _toggle_text_mode(self, checked: bool):
         if checked:
             self._close_panel()
             self.text_btn.setChecked(True)
             self.editor_view.set_mode("text")
-            self.win.snack("Haz clic en la página donde quieras escribir.", "info")
+            self.win.snack(tr("Haz clic en la página donde quieras escribir."), "info")
         else:
             self.editor_view.set_mode("edit")
 
@@ -876,7 +869,7 @@ class EditPage(QWidget):
         self.text_btn.setChecked(mode == "text")
         self.annot_btn.setChecked(mode == "markup")
         if mode != "markup":
-            self.annot_btn.setText("  Marcar")
+            self.annot_btn.setText(tr("  Marcar"))
         self.shape_btn.setChecked(mode == "shape")
         self.shape_panel.setVisible(mode == "shape")
         if mode == "shape":
@@ -888,7 +881,7 @@ class EditPage(QWidget):
         self.notes_btn.setChecked(mode in ("note", "attach"))
         self.copy_btn.setChecked(mode == "copy")
         if mode != "shape":
-            self.shape_btn.setText("  Dibujar")
+            self.shape_btn.setText(tr("  Dibujar"))
 
     # ── Enlaces ─────────────────────────────────────────────────────────
     # ── Sellos ──────────────────────────────────────────────────────────
@@ -901,16 +894,16 @@ class EditPage(QWidget):
             try:
                 size = at.image_size(str(dlg.result_path))
             except Exception:
-                self.win.snack("No se pudo crear el sello.", "error")
+                self.win.snack(tr("No se pudo crear el sello."), "error")
                 return
-            self.begin_place_image(str(dlg.result_path), size, max_frac=0.28, what="el sello")
+            self.begin_place_image(str(dlg.result_path), size, max_frac=0.28, what=tr("el sello"))
 
     # ── Copiar texto con sentido ────────────────────────────────────────
     def _toggle_copy_mode(self, checked: bool):
         if checked:
             self._close_panel()
             self.editor_view.set_mode("copy")
-            self.win.snack("Arrastra para copiar una zona, o haz clic en un párrafo o una tabla. Esc para salir.", "info")
+            self.win.snack(tr("Arrastra para copiar una zona, o haz clic en un párrafo o una tabla. Esc para salir."), "info")
         else:
             self.editor_view.set_mode("edit")
 
@@ -942,11 +935,11 @@ class EditPage(QWidget):
             return
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            self.win.snack(f"No se pudo analizar la página: {e}", "error")
+            self.win.snack(tr("No se pudo analizar la página: {e}", e=e), "error")
             return
         QApplication.restoreOverrideCursor()
         if not entry["words"]:
-            self.win.snack("No he encontrado texto en esa página.", "info")
+            self.win.snack(tr("No he encontrado texto en esa página."), "info")
             return
         if rect is not None:                                           # zona arrastrada
             d_rect = ptl.to_analysis_rect(entry, rect)
@@ -956,19 +949,19 @@ class EditPage(QWidget):
             d_pt = ptl.to_analysis_rect(entry, (pt[0], pt[1], pt[0], pt[1]))[:2]
             blk = lt.block_at(entry["blocks"], d_pt)
             if blk is None:
-                self.win.snack("Ahí no hay texto. Arrastra para elegir una zona.", "info")
+                self.win.snack(tr("Ahí no hay texto. Arrastra para elegir una zona."), "info")
                 return
             blocks = [blk]
             shown = ptl.from_analysis_rect(entry, blk.bbox)
         if not blocks:
-            self.win.snack("Esa zona no contiene texto.", "info")
+            self.win.snack(tr("Esa zona no contiene texto."), "info")
             return
         ev.show_copy_highlight(page_idx, shown)
         note = ""
         if entry["ocr"]:
-            note = ("Esta página es una imagen: el texto se ha reconocido ahora mismo (OCR, idioma: "
-                    + ", ".join(ptl.LANG_NAMES.get(l, l) for l in entry.get("langs", [])) + "). Para tenerlo siempre "
-                    "buscable y copiable en cualquier lector, usa Herramientas → OCR.")
+            note = tr("Esta página es una imagen: el texto se ha reconocido ahora mismo (OCR, idioma: {langs}). "
+                    "Para tenerlo siempre buscable y copiable en cualquier lector, usa Herramientas → OCR.",
+                    langs=", ".join(ptl.LANG_NAMES.get(l, l) for l in entry.get("langs", [])))
         dlg = CopyDialog(self.window(), blocks, note)
         dlg.exec()
         ev.clear_copy_highlight()
@@ -978,23 +971,23 @@ class EditPage(QWidget):
         m = self.notes_menu
         m.clear()
         ev = self.editor_view
-        m.addAction(ic.icon("note", TEXT, 17), "Añadir nota", self._enter_note)
-        m.addAction(ic.icon("link", TEXT, 17), "Adjuntar archivo…", self._pick_attachment)
+        m.addAction(ic.icon("note", TEXT, 17), tr("Añadir nota"), self._enter_note)
+        m.addAction(ic.icon("link", TEXT, 17), tr("Adjuntar archivo…"), self._pick_attachment)
         m.addSeparator()
-        a = m.addAction("Ocultar anotaciones (solo en pantalla)")
+        a = m.addAction(tr("Ocultar anotaciones (solo en pantalla)"))
         a.setCheckable(True)
         a.setChecked(ev.hide_annots)
         a.triggered.connect(lambda on: ev.set_hide_annots(bool(on)))
         if ev.mode in ("note", "attach"):
             m.addSeparator()
-            m.addAction("Terminar", lambda: ev.set_mode("edit"))
+            m.addAction(tr("Terminar"), lambda: ev.set_mode("edit"))
 
     def _enter_note(self):
         if self.doc is None:
             return
         self._close_panel()
         self.editor_view.set_mode("note")
-        self.win.snack("Haz clic donde quieras la nota. Clic en una nota para editarla; arrástrala para moverla.", "info")
+        self.win.snack(tr("Haz clic donde quieras la nota. Clic en una nota para editarla; arrástrala para moverla."), "info")
 
     def _on_note_requested(self, page_idx: int, pt, existing):
         author = os.environ.get("USERNAME", "")
@@ -1006,40 +999,40 @@ class EditPage(QWidget):
         if existing is None and not text:
             return
         if not self.editor_view.apply_note(page_idx, pt, existing, text, author, remove=dlg.remove):
-            self.win.snack("No se pudo guardar la nota.", "error")
+            self.win.snack(tr("No se pudo guardar la nota."), "error")
 
     def _pick_attachment(self):
         if self.doc is None:
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Elige el archivo que quieres adjuntar", str(Path.home()))
+        path, _ = QFileDialog.getOpenFileName(self, tr("Elige el archivo que quieres adjuntar"), str(Path.home()))
         if not path:
             return
         if os.path.getsize(path) > at.MAX_ATTACH:
-            self.win.snack("Ese archivo pesa más de 25 MB; no se adjunta.", "error")
+            self.win.snack(tr("Ese archivo pesa más de 25 MB; no se adjunta."), "error")
             return
         self._close_panel()
         self.editor_view.set_mode("attach")
         self.editor_view.pending_attach = path
         self.editor_view.viewport().setCursor(Qt.BlankCursor)             # en su lugar viaja el clip con el ratón
-        self.win.snack("Mueve el clip hasta donde quieras ponerlo y haz clic. Esc cancela.", "info")
+        self.win.snack(tr("Mueve el clip hasta donde quieras ponerlo y haz clic. Esc cancela."), "info")
 
     def _on_attach_clicked(self, page_idx: int, att: dict, gpos):
         m = QMenu(self)
-        m.addAction(f"Guardar una copia de «{att['name']}»…", lambda: self._save_attachment(page_idx, att))
-        m.addAction("Quitar adjunto", lambda: self.editor_view.remove_attachment(page_idx, att["xref"]))
+        m.addAction(tr("Guardar una copia de «{name}»…", name=att['name']), lambda: self._save_attachment(page_idx, att))
+        m.addAction(tr("Quitar adjunto"), lambda: self.editor_view.remove_attachment(page_idx, att["xref"]))
         m.exec(gpos)
 
     def _save_attachment(self, page_idx: int, att: dict):
         got = at.read_attachment(self.doc, page_idx, att["xref"])
         if not got:
-            self.win.snack("No se pudo leer el adjunto.", "error")
+            self.win.snack(tr("No se pudo leer el adjunto."), "error")
             return
         name, data = got
-        dest, _ = QFileDialog.getSaveFileName(self, "Guardar adjunto", str(Path.home() / "Downloads" / Path(name).name))
+        dest, _ = QFileDialog.getSaveFileName(self, tr("Guardar adjunto"), str(Path.home() / "Downloads" / Path(name).name))
         if dest:
             Path(dest).write_bytes(data)
-            self.win.snack(f"Adjunto guardado: {Path(dest).name}. No se abre solo: ábrelo tú si te fías de su origen.",
-                           "success")
+            self.win.snack(tr("Adjunto guardado: {name}. No se abre solo: ábrelo tú si te fías de su origen.",
+                           name=Path(dest).name), "success")
 
     def _reload_doc_from_bytes(self):
         """Reabre el documento desde su estado actual en memoria (conserva deshacer y modo)."""
@@ -1055,14 +1048,14 @@ class EditPage(QWidget):
         self.form_panel.setObjectName("Card")
         self.form_panel.setStyleSheet("QFrame#Card QPushButton { padding:5px 9px; font-size:12px; }")
         fl = FlowLayout(self.form_panel, margin=8, hspacing=6, vspacing=6)
-        hint = QLabel("Haz clic en un campo (recuadro azul) para rellenarlo. Arrastra en un hueco para crear uno nuevo.")
+        hint = QLabel(tr("Haz clic en un campo (recuadro azul) para rellenarlo. Arrastra en un hueco para crear uno nuevo."))
         hint.setObjectName("Hint")
         fl.addWidget(hint)
-        det = _btn("Detectar campos automáticamente…", "bolt", "Secondary", icon_color=TEXT)
-        det.setToolTip("Busca rayas, recuadros vacíos y casillas para convertirlos en campos")
+        det = _btn(tr("Detectar campos automáticamente…"), "bolt", "Secondary", icon_color=TEXT)
+        det.setToolTip(tr("Busca rayas, recuadros vacíos y casillas para convertirlos en campos"))
         det.clicked.connect(self._detect_fields)
         fl.addWidget(det)
-        tab = _btn("Orden de tabulación", "swap", "Secondary", icon_color=TEXT)
+        tab = _btn(tr("Orden de tabulación"), "swap", "Secondary", icon_color=TEXT)
         tab_menu = QMenu(tab)
 
         def fill_tab():
@@ -1076,8 +1069,8 @@ class EditPage(QWidget):
         tab_menu.aboutToShow.connect(fill_tab)
         tab.setMenu(tab_menu)
         fl.addWidget(tab)
-        flat = _btn("Aplanar formulario…", "download", "Secondary", icon_color=TEXT)
-        flat.setToolTip("Convierte los campos rellenados en contenido fijo de la página")
+        flat = _btn(tr("Aplanar formulario…"), "download", "Secondary", icon_color=TEXT)
+        flat.setToolTip(tr("Convierte los campos rellenados en contenido fijo de la página"))
         flat.clicked.connect(self._flatten_form)
         fl.addWidget(flat)
         self.form_panel.hide()
@@ -1089,36 +1082,16 @@ class EditPage(QWidget):
         else:
             self._enter_form()
 
-    def _fill_form_menu(self):
-        m = self.form_menu
-        m.clear()
-        active = self.editor_view.mode == "form"
-        a = m.addAction("Rellenar y crear campos")
-        a.setCheckable(True)
-        a.setChecked(active)
-        a.triggered.connect(self._enter_form)
-        m.addAction("Detectar campos automáticamente…", self._detect_fields)
-        tabs = m.addMenu("Orden de tabulación")
-        cur = ft.get_tab_order(self.doc) if self.doc is not None else None
-        for key, label in ft.TAB_ORDERS.items():
-            a = tabs.addAction(label)
-            a.setCheckable(True)
-            a.setChecked(cur == key)
-            a.triggered.connect(lambda _=False, k=key: self._set_tab_order(k))
-        m.addAction("Aplanar formulario…", self._flatten_form)
-        if active:
-            m.addSeparator()
-            m.addAction("Terminar", lambda: self.editor_view.set_mode("edit"))
-
     def _enter_form(self):
         if self.doc is None:
             return
         self._close_panel()
         self.editor_view.set_mode("form")
         n = sum(len(v) for v in self.editor_view._fm_cache.values())
-        self.win.snack(("Hay %d campos (recuadros azules): haz clic en uno para rellenarlo. " % n if n else
-                        "Este PDF no tiene campos. ") + "Arrastra un recuadro vacío para crear uno nuevo; clic derecho "
-                       "sobre un campo para eliminarlo.", "info")
+        msg = tr("Hay {n} campos (recuadros azules): haz clic en uno para rellenarlo. ", n=n) if n else \
+            tr("Este PDF no tiene campos. ")
+        self.win.snack(msg + tr("Arrastra un recuadro vacío para crear uno nuevo; clic derecho "
+                       "sobre un campo para eliminarlo."), "info")
 
     def _detect_fields(self):
         if self.doc is None:
@@ -1126,7 +1099,7 @@ class EditPage(QWidget):
         found = ft.detect_all(self.doc)
         total = sum(len(v) for v in found.values())
         if not total:
-            self.win.snack("No encontré rayas, recuadros vacíos ni casillas que convertir en campos.", "info")
+            self.win.snack(tr("No encontré rayas, recuadros vacíos ni casillas que convertir en campos."), "info")
             return
         self._close_panel()
         self.editor_view.set_mode("form")
@@ -1135,10 +1108,11 @@ class EditPage(QWidget):
         self.editor_view.scroll_to_page(first)
         n_chk = sum(1 for v in found.values() for c in v if c["kind"] == "checkbox")
         resp = QMessageBox.question(
-            self, "Detectar campos",
-            f"He encontrado {total} posibles campos (marcados en verde): {total - n_chk} de texto y {n_chk} casillas.\n\n"
+            self, tr("Detectar campos"),
+            tr("He encontrado {total} posibles campos (marcados en verde): {n_text} de texto y {n_chk} casillas.\n\n"
             "Salen de rayas, recuadros vacíos y cuadritos de la página; revisa que no sobre ninguno (puedes borrar "
-            "los que no quieras con clic derecho). ¿Crearlos?", QMessageBox.Yes | QMessageBox.No)
+            "los que no quieras con clic derecho). ¿Crearlos?", total=total, n_text=total - n_chk, n_chk=n_chk),
+            QMessageBox.Yes | QMessageBox.No)
         self.editor_view.show_candidates(None)
         if resp != QMessageBox.Yes:
             return
@@ -1148,57 +1122,58 @@ class EditPage(QWidget):
             self._mark_dirty()
             self.editor_view.reload_preserving_scroll()
             self.editor_view._fm_refresh()
-            self.win.snack(f"{n} campos creados. Haz clic en uno para rellenarlo.", "success")
+            self.win.snack(tr("{n} campos creados. Haz clic en uno para rellenarlo.", n=n), "success")
         else:
-            self.win.snack("No se pudo crear ningún campo.", "error")
+            self.win.snack(tr("No se pudo crear ningún campo."), "error")
 
     def _set_tab_order(self, order: str):
         if self.doc is None:
             return
         if not ft.has_fields(self.doc):
-            self.win.snack("Este PDF no tiene campos de formulario.", "info")
+            self.win.snack(tr("Este PDF no tiene campos de formulario."), "info")
             return
         self._before_mutate()
         n = ft.set_tab_order(self.doc, order)
         if n:
             self._mark_dirty()
-            self.win.snack(f"Orden de tabulación: {ft.TAB_ORDERS[order].lower()} (en {n} página{'s' if n != 1 else ''}).",
+            self.win.snack(tr("Orden de tabulación: {order} (en {n} página{s}).",
+                           order=ft.TAB_ORDERS[order].lower(), n=n, s='s' if n != 1 else ''),
                            "success")
 
     def _on_field_requested(self, page_idx: int, rect):
         dlg = FieldDialog(self.window(), ft.unique_name(self.doc, "campo"))
         if dlg.exec() == QDialog.Accepted and dlg.spec:
             if self.editor_view.apply_new_field(page_idx, rect, dlg.spec):
-                self.win.snack("Campo creado.", "success")
+                self.win.snack(tr("Campo creado."), "success")
             else:
-                self.win.snack("No se pudo crear el campo.", "error")
+                self.win.snack(tr("No se pudo crear el campo."), "error")
 
     def _flatten_form(self):
         if self.doc is None:
             return
         if not ft.has_fields(self.doc):
-            self.win.snack("Este PDF no tiene campos de formulario.", "info")
+            self.win.snack(tr("Este PDF no tiene campos de formulario."), "info")
             return
-        if QMessageBox.question(self, "Aplanar formulario",
-                                "Los campos pasarán a ser contenido fijo de la página, con lo que hayas rellenado: "
+        if QMessageBox.question(self, tr("Aplanar formulario"),
+                                tr("Los campos pasarán a ser contenido fijo de la página, con lo que hayas rellenado: "
                                 "ya no se podrán editar. Puedes deshacerlo con Ctrl+Z hasta que guardes.\n\n"
-                                "¿Aplanar el formulario?", QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
+                                "¿Aplanar el formulario?"), QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         self._before_mutate()
         if ft.flatten(self.doc):
             self._mark_dirty()
             self.editor_view.set_mode("edit")
             self.editor_view.reload_preserving_scroll()
-            self.win.snack("Formulario aplanado.", "success")
+            self.win.snack(tr("Formulario aplanado."), "success")
         else:
-            self.win.snack("No se pudo aplanar el formulario.", "error")
+            self.win.snack(tr("No se pudo aplanar el formulario."), "error")
 
     def _toggle_link_mode(self, checked: bool):
         if checked:
             self._close_panel()
             self.editor_view.set_mode("link")
-            self.win.snack("Arrastra sobre un texto o un área para crear un enlace. Haz clic en un recuadro azul "
-                           "para editarlo o quitarlo.", "info")
+            self.win.snack(tr("Arrastra sobre un texto o un área para crear un enlace. Haz clic en un recuadro azul "
+                           "para editarlo o quitarlo."), "info")
         else:
             self.editor_view.set_mode("edit")
 
@@ -1210,19 +1185,19 @@ class EditPage(QWidget):
             return
         if dlg.remove:
             if self.editor_view.apply_link(page_idx, boxes, existing, None):
-                self.win.snack("Enlace quitado.", "info")
+                self.win.snack(tr("Enlace quitado."), "info")
             return
         if self.editor_view.apply_link(page_idx, boxes, existing, dlg.result_dest,
                                        underline=existing is None and dlg.underline_cb.isChecked(), obj=from_obj,
                                        color=dlg.link_color):
-            self.win.snack("Enlace guardado." if existing else
-                           f"Enlace creado ({len(boxes)} zona{'s' if len(boxes) != 1 else ''}).", "success")
+            self.win.snack(tr("Enlace guardado.") if existing else
+                           tr("Enlace creado ({n} zona{s}).", n=len(boxes), s='s' if len(boxes) != 1 else ''), "success")
             if from_obj and len(boxes) == 1:
                 dlg2 = ClickIconDialog(self.window())
                 if dlg2.exec() == QDialog.Accepted and dlg2.kind:
                     self._add_click_icon(page_idx, boxes[0], dlg2.kind)
         else:
-            self.win.snack("No se pudo guardar el enlace.", "error")
+            self.win.snack(tr("No se pudo guardar el enlace."), "error")
 
     def _open_icon_picker(self):
         ev = self.editor_view
@@ -1250,25 +1225,25 @@ class EditPage(QWidget):
         self._before_mutate()
         xref = at.add_click_icon(self.doc, page_idx, rect, kind, 0.0)
         if not xref:
-            self.win.snack("No se pudo añadir el icono.", "error")
+            self.win.snack(tr("No se pudo añadir el icono."), "error")
             return
         self._mark_dirty()
         ev = self.editor_view
         ev.refresh_page(page_idx)
         ev.set_mode("image")
         ev._img_select({"page": page_idx, "xref": xref, "rect": rect, "icon": (kind, 0.0)})
-        self.win.snack("Icono añadido. Arrástralo para moverlo; el punto de arriba lo gira (o las teclas [ y ]).",
+        self.win.snack(tr("Icono añadido. Arrástralo para moverlo; el punto de arriba lo gira (o las teclas [ y ])."),
                        "success")
 
     # ── Imagen ──────────────────────────────────────────────────────────
     def _fill_image_menu(self):
         m = self.image_menu
         m.clear()
-        m.addAction(ic.icon("image", TEXT, 17), "Insertar una imagen…", self._pick_image)
-        m.addAction(ic.icon("select", TEXT, 17), "Seleccionar, mover o borrar imágenes", self._image_select_mode)
+        m.addAction(ic.icon("image", TEXT, 17), tr("Insertar una imagen…"), self._pick_image)
+        m.addAction(ic.icon("select", TEXT, 17), tr("Seleccionar, mover o borrar imágenes"), self._image_select_mode)
         if self.editor_view.mode == "image":
             m.addSeparator()
-            m.addAction("Terminar", lambda: self.editor_view.set_mode("edit"))
+            m.addAction(tr("Terminar"), lambda: self.editor_view.set_mode("edit"))
 
     def _image_select_mode(self):
         """Modo imagen sin insertar nada: clic en una imagen (del PDF o puesta aquí) para moverla, escalarla o borrarla."""
@@ -1278,8 +1253,8 @@ class EditPage(QWidget):
         self.editor_view._img_select(None)
         self.editor_view.set_mode("image")
         self.editor_view.viewport().setCursor(Qt.ArrowCursor)
-        self.win.snack("Haz clic en una imagen para seleccionarla: arrástrala para moverla, usa los puntos para cambiar "
-                       "el tamaño y pulsa Supr para borrarla (en las imágenes del PDF, solo borrar). Esc para salir.",
+        self.win.snack(tr("Haz clic en una imagen para seleccionarla: arrástrala para moverla, usa los puntos para cambiar "
+                       "el tamaño y pulsa Supr para borrarla (en las imágenes del PDF, solo borrar). Esc para salir."),
                        "info")
 
     def _pick_image(self):
@@ -1288,8 +1263,8 @@ class EditPage(QWidget):
             return
         self._close_panel()                      # suelta lo que hubiera activo (Marcar, Dibujar…) antes de elegir
         path, _ = QFileDialog.getOpenFileName(
-            self, "Elige una imagen", str(Path.home() / "Pictures"),
-            "Imágenes (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;Todos los archivos (*.*)")
+            self, tr("Elige una imagen"), str(Path.home() / "Pictures"),
+            tr("Imágenes (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;Todos los archivos (*.*)"))
         if not path:
             self.image_btn.setChecked(self.editor_view.mode == "image")
             return
@@ -1297,15 +1272,18 @@ class EditPage(QWidget):
             size = at.image_size(path)
         except Exception:
             self.image_btn.setChecked(False)
-            self.win.snack("No se pudo leer esa imagen.", "error")
+            self.win.snack(tr("No se pudo leer esa imagen."), "error")
             return
         self.begin_place_image(path, size)
 
-    def begin_place_image(self, source, size, max_frac: float = 0.45, what: str = "la imagen"):
+    def begin_place_image(self, source, size, max_frac: float = 0.45, what: str = None):
+        if what is None:
+            what = tr("la imagen")
         self._close_panel()
         self.editor_view.start_place_image(source, size, max_frac)
-        self.win.snack(f"Haz clic donde quieras {what} (o arrastra para dibujarle el tamaño). Después puedes "
-                       "moverla, cambiarle el tamaño por las esquinas (Mayús = deformar) y borrarla con Supr.", "info")
+        self.win.snack(tr("Haz clic donde quieras {what} (o arrastra para dibujarle el tamaño). Después puedes "
+                       "moverla, cambiarle el tamaño por las esquinas (Mayús = deformar) y borrarla con Supr.",
+                       what=what), "info")
 
     # ── Firma ───────────────────────────────────────────────────────────
     def _sig_thumb(self, path) -> QIcon:
@@ -1329,26 +1307,26 @@ class EditPage(QWidget):
             act.triggered.connect(lambda _=False, p_=path: self._place_signature(p_))
         if saved:
             m.addSeparator()
-        m.addAction("Crear firma nueva…", self._new_signature)
+        m.addAction(tr("Crear firma nueva…"), self._new_signature)
         if saved:
-            dm = m.addMenu("Gestionar mis firmas")
+            dm = m.addMenu(tr("Gestionar mis firmas"))
             for path in saved[:10]:
                 sm = dm.addMenu(self._sig_thumb(path), "  " + sp.display_name(path))
-                sm.addAction("Cambiar el nombre…", lambda _=False, p_=path: self._rename_signature(p_))
+                sm.addAction(tr("Cambiar el nombre…"), lambda _=False, p_=path: self._rename_signature(p_))
                 if sp.load_meta(path).get("type") in ("draw", "text"):
-                    sm.addAction("Editar…", lambda _=False, p_=path: self._edit_signature(p_))
-                sm.addAction("Borrar", lambda _=False, p_=path: self._delete_signature(p_))
+                    sm.addAction(tr("Editar…"), lambda _=False, p_=path: self._edit_signature(p_))
+                sm.addAction(tr("Borrar"), lambda _=False, p_=path: self._delete_signature(p_))
 
     def _rename_signature(self, path):
-        name, ok = QInputDialog.getText(self, "Nombre de la firma", "Nombre:", text=sp.display_name(path))
+        name, ok = QInputDialog.getText(self, tr("Nombre de la firma"), tr("Nombre:"), text=sp.display_name(path))
         if ok and name.strip():
             sp.rename(path, name)
-            self.win.snack("Firma renombrada.", "info")
+            self.win.snack(tr("Firma renombrada."), "info")
 
     def _edit_signature(self, path):
         dlg = sp.SignatureDialog(self.window(), edit_path=path)
         if dlg.exec() == QDialog.Accepted:
-            self.win.snack("Firma actualizada. Se usará la nueva versión en los documentos siguientes.", "success")
+            self.win.snack(tr("Firma actualizada. Se usará la nueva versión en los documentos siguientes."), "success")
 
     def _on_save_signature(self, desc: dict):
         """Clic derecho sobre un dibujo libre → guardarlo como firma reutilizable."""
@@ -1358,13 +1336,13 @@ class EditPage(QWidget):
         width = max(1.0, float(desc.get("width", 2.0)) / (5 if desc.get("marker") else 1))
         img = sp.render_strokes(strokes, color, width, scale=5.0)
         if img is None:
-            self.win.snack("Ese dibujo no se puede guardar como firma.", "error")
+            self.win.snack(tr("Ese dibujo no se puede guardar como firma."), "error")
             return
-        name, ok = QInputDialog.getText(self, "Guardar como firma", "Nombre de la firma:", text="Firma")
+        name, ok = QInputDialog.getText(self, tr("Guardar como firma"), tr("Nombre de la firma:"), text=tr("Firma"))
         if not ok:
             return
         sp.save_png(img, keep=True, name=name, meta=sp.strokes_meta(strokes, color, width))
-        self.win.snack("Firma guardada: la tienes en el menú Firma.", "success")
+        self.win.snack(tr("Firma guardada: la tienes en el menú Firma."), "success")
 
     def _new_signature(self):
         if self.doc is None:
@@ -1378,15 +1356,15 @@ class EditPage(QWidget):
         try:
             size = at.image_size(str(path))
         except Exception:
-            self.win.snack("No se pudo abrir esa firma.", "error")
+            self.win.snack(tr("No se pudo abrir esa firma."), "error")
             return
-        self.begin_place_image(str(path), size, max_frac=0.22, what="la firma")
+        self.begin_place_image(str(path), size, max_frac=0.22, what=tr("la firma"))
 
     def _delete_signature(self, path):
-        if QMessageBox.question(self, "Borrar firma", "¿Borrar esta firma guardada?",
+        if QMessageBox.question(self, tr("Borrar firma"), tr("¿Borrar esta firma guardada?"),
                                 QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
             sp.delete_saved(path)
-            self.win.snack("Firma borrada.", "info")
+            self.win.snack(tr("Firma borrada."), "info")
 
     # ── Formas: rectángulo, elipse, línea, flecha ───────────────────────
     # ── Barra de dibujo: formas + color, relleno y grosor ───────────────
@@ -1400,34 +1378,34 @@ class EditPage(QWidget):
         for kind, label in self._SHAPE_TOOLS:
             icon_name = {"select": "select", "pen": "pen", "marker": "highlight", "rect": "rect", "ellipse": "ellipse",
                          "line": "line", "arrow": "arrow"}[kind]
-            b = _btn(label, icon_name, "Secondary", icon_color=TEXT)
+            b = _btn(tr(label), icon_name, "Secondary", icon_color=TEXT)
             b.setCheckable(True)
-            b.setToolTip(label)
+            b.setToolTip(tr(label))
             b.clicked.connect(lambda _=False, k=kind: self._enter_shape(kind=k))
             fl.addWidget(b)
             self._shape_tool_btns[kind] = b
         self.sh_stroke_btn = QPushButton(); self.sh_fill_btn = QPushButton()
-        for b, tip in ((self.sh_stroke_btn, "Color del borde / trazo"), (self.sh_fill_btn, "Color de relleno (rectángulo y elipse)")):
+        for b, tip in ((self.sh_stroke_btn, tr("Color del borde / trazo")), (self.sh_fill_btn, tr("Color de relleno (rectángulo y elipse)"))):
             b.setObjectName("Secondary")
             b.setToolTip(tip)
             fl.addWidget(b)
         self.sh_stroke_btn.clicked.connect(lambda: self._shape_color_menu(self.sh_stroke_btn, False))
         self.sh_fill_btn.clicked.connect(lambda: self._shape_color_menu(self.sh_fill_btn, True))
         self.sh_width_combo = QComboBox()
-        for w, label in ((1.0, "Fino"), (2.0, "Normal"), (4.0, "Grueso"), (7.0, "Muy grueso")):
-            self.sh_width_combo.addItem("Grosor: " + label, w)
-        self.sh_width_combo.setToolTip("Grosor de la línea")
+        for w, label in self._WIDTH_LABELS:
+            self.sh_width_combo.addItem(tr("Grosor: {label}", label=tr(label)), w)
+        self.sh_width_combo.setToolTip(tr("Grosor de la línea"))
         self.sh_width_combo.activated.connect(lambda i: self._enter_shape(width=self.sh_width_combo.itemData(i)))
         fl.addWidget(self.sh_width_combo)
         self.sh_op_btn = QPushButton()
         self.sh_op_btn.setObjectName("Secondary")
-        self.sh_op_btn.setToolTip("Opacidad: total por defecto 100 %; opcionalmente otra para el trazo o el relleno")
+        self.sh_op_btn.setToolTip(tr("Opacidad: total por defecto 100 %; opcionalmente otra para el trazo o el relleno"))
         self.sh_op_btn.clicked.connect(self._shape_opacity_menu)
         fl.addWidget(self.sh_op_btn)
         self.sh_head_combo = QComboBox()
         for name, label in at.HEAD_LABELS:
             self.sh_head_combo.addItem(label, name)
-        self.sh_head_combo.setToolTip("Forma de la punta de las flechas")
+        self.sh_head_combo.setToolTip(tr("Forma de la punta de las flechas"))
         self.sh_head_combo.activated.connect(lambda i: self._set_shape_head(self.sh_head_combo.itemData(i)))
         fl.addWidget(self.sh_head_combo)
         self.shape_panel.hide()
@@ -1498,53 +1476,7 @@ class EditPage(QWidget):
     _SHAPE_TOOLS = (("select", "Seleccionar / mover"), ("pen", "Lápiz libre"), ("marker", "Rotulador libre"),
                     ("rect", "Rectángulo"),
                     ("ellipse", "Elipse"), ("line", "Línea"), ("arrow", "Flecha"))
-
-    def _fill_shape_menu(self):
-        m = self.shape_menu
-        m.clear()
-        ev = self.editor_view
-        active = ev.mode == "shape"
-        for kind, label in self._SHAPE_TOOLS:
-            act = m.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(active and ev.shape_kind == kind)
-            act.triggered.connect(lambda _=False, k=kind: self._enter_shape(kind=k))
-            if kind in ("select", "marker"):
-                m.addSeparator()
-        if active and ev._ss_sel:
-            m.addAction("Duplicar selección\tCtrl+D", ev.duplicate_selection)
-            m.addAction("Eliminar selección\tSupr", ev.delete_selection)
-        m.addSeparator()
-
-        def swatch(rgb):
-            pm = QPixmap(14, 14)
-            pm.fill(QColor(*(int(c * 255) for c in rgb)))
-            return QIcon(pm)
-        sub_c = m.addMenu("Color del borde")
-        for name, rgb in at.SHAPE_COLORS.items():
-            a = sub_c.addAction(swatch(rgb), name.capitalize())
-            a.setCheckable(True)
-            a.setChecked(name == ev.shape_color)
-            a.triggered.connect(lambda _=False, n=name: self._enter_shape(color=n))
-        sub_w = m.addMenu("Grosor")
-        for w, label in ((1.0, "Fino"), (2.0, "Normal"), (4.0, "Grueso"), (7.0, "Muy grueso")):
-            a = sub_w.addAction(label)
-            a.setCheckable(True)
-            a.setChecked(ev.shape_width == w)
-            a.triggered.connect(lambda _=False, v=w: self._enter_shape(width=v))
-        sub_f = m.addMenu("Relleno (formas)")
-        a = sub_f.addAction("Sin relleno")
-        a.setCheckable(True)
-        a.setChecked(ev.shape_fill is None)
-        a.triggered.connect(lambda _=False: self._enter_shape(fill=""))
-        for name, rgb in at.SHAPE_COLORS.items():
-            a = sub_f.addAction(swatch(rgb), name.capitalize())
-            a.setCheckable(True)
-            a.setChecked(ev.shape_fill == name)
-            a.triggered.connect(lambda _=False, n=name: self._enter_shape(fill=n))
-        if active:
-            m.addSeparator()
-            m.addAction("Terminar de dibujar", lambda: ev.set_mode("edit"))
+    _WIDTH_LABELS = ((1.0, "Fino"), (2.0, "Normal"), (4.0, "Grueso"), (7.0, "Muy grueso"))
 
     def _enter_shape(self, kind=None, color=None, width=None, fill=None):
         ev = self.editor_view
@@ -1566,14 +1498,14 @@ class EditPage(QWidget):
             ev.restyle_selection(color, width, fill)
             return
         if ev.shape_kind == "select":
-            self.win.snack("Clic en una forma o trazo para seleccionarlo: arrastra para mover, puntos blancos para "
-                           "cambiar el tamaño, Ctrl+D duplica, Supr borra.", "info")
+            self.win.snack(tr("Clic en una forma o trazo para seleccionarlo: arrastra para mover, puntos blancos para "
+                           "cambiar el tamaño, Ctrl+D duplica, Supr borra."), "info")
             return
         if ev.shape_kind in ("pen", "marker"):
-            self.win.snack("Dibuja con el ratón. Para mover, escalar o duplicar un trazo: «Seleccionar / mover».", "info")
+            self.win.snack(tr("Dibuja con el ratón. Para mover, escalar o duplicar un trazo: «Seleccionar / mover»."), "info")
         else:
-            self.win.snack("Arrastra para dibujar (Mayús para proporción exacta). Para mover, escalar o duplicar "
-                           "una forma ya dibujada, elige «Seleccionar / mover» o haz clic en su borde.", "info")
+            self.win.snack(tr("Arrastra para dibujar (Mayús para proporción exacta). Para mover, escalar o duplicar "
+                           "una forma ya dibujada, elige «Seleccionar / mover» o haz clic en su borde."), "info")
 
     # ── Marcar texto: resaltar, subrayar, tachar ────────────────────────
     _MARK_TOOLS = (("highlight", "Resaltar", "highlight"), ("underline", "Subrayar", "underline"),
@@ -1585,12 +1517,12 @@ class EditPage(QWidget):
         ev = self.editor_view
         active = ev.mode == "markup"
         for kind, label, icon_name in self._MARK_TOOLS:
-            act = m.addAction(ic.icon(icon_name, TEXT, 17), label)
+            act = m.addAction(ic.icon(icon_name, TEXT, 17), tr(label))
             act.setCheckable(True)
             act.setChecked(active and ev.markup_kind == kind)
             act.triggered.connect(lambda _=False, k=kind: self._enter_markup(k))
         m.addSeparator()
-        sub = m.addMenu("Color")
+        sub = m.addMenu(tr("Color"))
         cur = ev.markup_color or at.DEFAULT_COLOR.get(ev.markup_kind, "amarillo")
         for name, rgb in at.COLORS.items():
             pm = QPixmap(14, 14)
@@ -1601,7 +1533,7 @@ class EditPage(QWidget):
             act.triggered.connect(lambda _=False, n=name: self._set_markup_color(n))
         if active:
             m.addSeparator()
-            m.addAction("Terminar de marcar", lambda: ev.set_mode("edit"))
+            m.addAction(tr("Terminar de marcar"), lambda: ev.set_mode("edit"))
 
     def _enter_markup(self, kind: str):
         ev = self.editor_view
@@ -1611,9 +1543,9 @@ class EditPage(QWidget):
         self._close_panel()
         ev.set_mode("markup")
         label = {"highlight": "Resaltar", "underline": "Subrayar", "strike": "Tachar", "erase": "Quitar marca"}[kind]
-        self.annot_btn.setText("  " + label)
-        self.win.snack("Haz clic sobre una marca para quitarla." if kind == "erase"
-                       else "Arrastra sobre el texto (o haz clic en una palabra) para marcarlo.", "info")
+        self.annot_btn.setText("  " + tr(label))
+        self.win.snack(tr("Haz clic sobre una marca para quitarla.") if kind == "erase"
+                       else tr("Arrastra sobre el texto (o haz clic en una palabra) para marcarlo."), "info")
 
     def _set_markup_color(self, name: str):
         ev = self.editor_view
@@ -1625,10 +1557,10 @@ class EditPage(QWidget):
     def _toggle_manual(self, checked: bool):
         ev = self.editor_view
         ev.manual = checked
-        self.manual_btn.setText("Manual" if checked else "Automático")
+        self.manual_btn.setText(tr("Manual") if checked else tr("Automático"))
         ev.reload_preserving_scroll()
-        self.win.snack("Modo manual: cada línea se edita por separado y no se mueve nada más." if checked
-                       else "Modo automático: párrafos, listas, cabecera, pie y numeración.", "info")
+        self.win.snack(tr("Modo manual: cada línea se edita por separado y no se mueve nada más.") if checked
+                       else tr("Modo automático: párrafos, listas, cabecera, pie y numeración."), "info")
 
     def _mark_dirty(self):
         self.dirty = True
@@ -1660,7 +1592,7 @@ class EditPage(QWidget):
             self.editor_view._close_inline_editor(commit=True)
         name = (self.current_file or {}).get("name", "documento.pdf")
         if not dr.save(self.doc, name, restart=True, dirty=self.dirty):
-            self.win.snack("No se pudo guardar el borrador para reiniciar.", "error")
+            self.win.snack(tr("No se pudo guardar el borrador para reiniciar."), "error")
             return
         from PySide6.QtCore import QProcess
         args = [os.path.abspath(sys.argv[0])] if not getattr(sys, "frozen", False) else []
@@ -1668,7 +1600,7 @@ class EditPage(QWidget):
             self.win._force_quit = True
             self.win.close()
         else:
-            self.win.snack("No se pudo reiniciar la aplicación; ábrela tú y te preguntará si continúas.", "error")
+            self.win.snack(tr("No se pudo reiniciar la aplicación; ábrela tú y te preguntará si continúas."), "error")
 
     def _warn_font_missing(self, family: str):
         if family in self._warned_fonts:
@@ -1676,21 +1608,22 @@ class EditPage(QWidget):
         self._warned_fonts.add(family)
         fb = self.editor_view._FALLBACK_FONT
         self.win.snack(
-            f"La fuente «{family}» no está instalada: se ha usado «{fb}» en su lugar. Si quieres usar «{family}», "
-            f"instálala en Windows (doble clic en su archivo → Instalar) y reabre la aplicación.", "info")
+            tr("La fuente «{family}» no está instalada: se ha usado «{fb}» en su lugar. Si quieres usar «{family}», "
+            "instálala en Windows (doble clic en su archivo → Instalar) y reabre la aplicación.",
+            family=family, fb=fb), "info")
 
     def _maybe_prompt_save(self):
         if self.dirty and self.doc is not None:
             resp = QMessageBox.question(
-                self, "Cambios sin guardar",
-                "Tienes cambios sin guardar en este PDF. ¿Guardarlos antes de cambiar de archivo?",
+                self, tr("Cambios sin guardar"),
+                tr("Tienes cambios sin guardar en este PDF. ¿Guardarlos antes de cambiar de archivo?"),
                 QMessageBox.Yes | QMessageBox.No)
             if resp == QMessageBox.Yes:
                 self._save_changes()
 
     def _save_changes(self):
         if not self.doc or not self.current_file:
-            self.win.snack("Selecciona un archivo", "error"); return
+            self.win.snack(tr("Selecciona un archivo"), "error"); return
         out = be.save_edit_session(self.doc, self.current_file["path"])
         if out:
             idx = self.file_combo.currentIndex()
@@ -1701,20 +1634,20 @@ class EditPage(QWidget):
             self.file_combo.blockSignals(False)
             self.dirty = False
             dr.clear()
-            self.win.snack(f"✓ Guardado: {Path(out).name} — "
-                            "listo para guardar una copia o seguir con otra herramienta", "success")
+            self.win.snack(tr("✓ Guardado: {name} — "
+                            "listo para guardar una copia o seguir con otra herramienta", name=Path(out).name), "success")
         else:
-            self.win.snack("No se pudo guardar", "error")
+            self.win.snack(tr("No se pudo guardar"), "error")
 
     # ── Censurar texto (global, por búsqueda) ───────────────────────────
     def _do_censor(self):
         texto = self.censor_field.text().strip()
         if not texto:
-            self.win.snack("Escribe el texto a censurar", "error"); return
+            self.win.snack(tr("Escribe el texto a censurar"), "error"); return
         f = self._selected_file()
         if not f:
-            self.win.snack("Selecciona un archivo", "error"); return
-        self.win.snack("Censurando…", "info")
+            self.win.snack(tr("Selecciona un archivo"), "error"); return
+        self.win.snack(tr("Censurando…"), "info")
 
         def _run():
             out = be.censor_text_in_pdf(f["path"], texto)
@@ -1723,12 +1656,12 @@ class EditPage(QWidget):
                 if out:
                     self.win.record_step("censor", {"texto": texto})
                     self.win.replace_file(f, out)
-                    self.win.snack(f"✓ Censurado (sin vuelta atrás): {Path(out).name} — "
-                                    "listo para guardar o seguir con otra herramienta", "success")
+                    self.win.snack(tr("✓ Censurado (sin vuelta atrás): {name} — "
+                                    "listo para guardar o seguir con otra herramienta", name=Path(out).name), "success")
                     self.populate()
                     self._close_panel()
                 else:
-                    self.win.snack("No se encontró ese texto en el PDF", "error")
+                    self.win.snack(tr("No se encontró ese texto en el PDF"), "error")
             on_gui(done)
 
         run_bg(_run)
@@ -1741,15 +1674,15 @@ class EditPage(QWidget):
         self.buscar_field.setText(text.strip())
         self.reemplazar_field.clear()
         self.reemplazar_field.setFocus()
-        self.win.snack("Escribe el texto nuevo y pulsa Reemplazar.", "info")
+        self.win.snack(tr("Escribe el texto nuevo y pulsa Reemplazar."), "info")
 
     def _do_find_replace(self):
         buscar = self.buscar_field.text().strip()
         reemplazar = self.reemplazar_field.text()
         if not buscar:
-            self.win.snack("Escribe el texto a buscar", "error"); return
+            self.win.snack(tr("Escribe el texto a buscar"), "error"); return
         if self.doc is None:
-            self.win.snack("Selecciona un archivo", "error"); return
+            self.win.snack(tr("Selecciona un archivo"), "error"); return
         ev = self.editor_view
         ev._close_inline_editor(commit=True)
 
@@ -1759,8 +1692,8 @@ class EditPage(QWidget):
                 added = be.paragraph_edit_adds_pages(self.doc, page, para, "".join(r["text"] for r in new_runs),
                                                      para["size"], para["color"], runs=[dict(r) for r in new_runs])
                 if added and not ev.ask_header_footer(
-                        page, "El texto nuevo no cabe y se creará una página. Marca la cabecera y el pie para no "
-                              "tocarlos y decide cómo se repiten. Si cancelas, no se reemplaza nada más."):
+                        page, tr("El texto nuevo no cabe y se creará una página. Marca la cabecera y el pie para no "
+                              "tocarlos y decide cómo se repiten. Si cancelas, no se reemplaza nada más.")):
                     return False
             return True
 
@@ -1770,19 +1703,20 @@ class EditPage(QWidget):
                                          case=self.case_cb.isChecked(), before=self._before_mutate, ask_pages=ask)
         except Exception as e:
             QApplication.restoreOverrideCursor()
-            self.win.snack(f"No se pudo reemplazar: {e}", "error")
+            self.win.snack(tr("No se pudo reemplazar: {e}", e=e), "error")
             return
         QApplication.restoreOverrideCursor()
         if res["cancelled"]:
             if res["count"]:
                 self._do_undo()                                  # no se deja a medias
-            self.win.snack("Cancelado: no se ha reemplazado nada.", "info")
+            self.win.snack(tr("Cancelado: no se ha reemplazado nada."), "info")
             return
         if not res["count"]:
-            self.win.snack("No se encontró ese texto en el PDF.", "error")
+            self.win.snack(tr("No se encontró ese texto en el PDF."), "error")
             return
         self._mark_dirty()
         self.win.record_step("find_replace", {"buscar": buscar, "reemplazar": reemplazar})
         ev.reload_preserving_scroll()
-        self.win.snack(f"✓ {res['count']} cambio{'s' if res['count'] != 1 else ''} en "
-                       f"{len(res['pages'])} página{'s' if len(res['pages']) != 1 else ''}. Ctrl+Z lo deshace.", "success")
+        self.win.snack(tr("✓ {n} cambio{s1} en {np} página{s2}. Ctrl+Z lo deshace.",
+                       n=res['count'], s1='s' if res['count'] != 1 else '',
+                       np=len(res['pages']), s2='s' if len(res['pages']) != 1 else ''), "success")

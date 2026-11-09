@@ -1,28 +1,21 @@
 # -*- coding: utf-8 -*-
 """Pantalla Organizar: cuadrícula de miniaturas de páginas."""
-import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QSize, QTimer, QEvent, QPoint
+from PySide6.QtGui import QPixmap, QIcon, QPainter, QColor, QPen
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QWidget,
+    QLabel,
+    QPushButton,
+    QHBoxLayout,
+    QVBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QFileDialog,
+    QAbstractItemView,
+    QMenu,
 )
 
 try:
@@ -32,25 +25,11 @@ except ImportError:
     HAS_SVG = False
 
 import backend as be
-import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
-import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import ACCENT
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
+from i18n import tr
 from ui.common import FILE_COLORS, _btn
 from ui.widgets import BackHeader, render_page_card
 
@@ -239,8 +218,8 @@ class PageGridWidget(QListWidget):
             return
         pg = self._resolve(item)
         menu = QMenu(self)
-        rot_act = menu.addAction("⟳  Rotar 90°")
-        del_act = menu.addAction("✕  Eliminar página")
+        rot_act = menu.addAction("⟳  " + tr("Rotar 90°"))
+        del_act = menu.addAction("✕  " + tr("Eliminar página"))
         action = menu.exec(e.globalPos())
         if action == rot_act:
             self._on_rotate(pg)
@@ -259,9 +238,9 @@ class OrganizePage(QWidget):
         self.org_pages: list[dict] = []
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.addWidget(BackHeader("Organize – Gestionar páginas", lambda: win.go_home()))
+        root.addWidget(BackHeader(tr("Organize – Gestionar páginas"), lambda: win.go_home()))
 
-        hint = QLabel("Arrastra las páginas para reordenarlas · clic derecho o R/Supr para rotar/eliminar")
+        hint = QLabel(tr("Arrastra las páginas para reordenarlas · clic derecho o R/Supr para rotar/eliminar"))
         hint.setObjectName("Hint")
         root.addWidget(hint)
 
@@ -272,9 +251,9 @@ class OrganizePage(QWidget):
         root.addWidget(self.grid, 1)
 
         btn_row = QHBoxLayout()
-        save_btn = _btn("Organize y guardar en Descargas", "download", "Primary")
+        save_btn = _btn(tr("Organize y guardar en Descargas"), "download", "Primary")
         save_btn.clicked.connect(lambda: self._do_save(False))
-        save_as_btn = QPushButton("Guardar como…")
+        save_as_btn = QPushButton(tr("Guardar como…"))
         save_as_btn.clicked.connect(lambda: self._do_save(True))
         btn_row.addWidget(save_btn)
         btn_row.addWidget(save_as_btn)
@@ -314,7 +293,7 @@ class OrganizePage(QWidget):
 
     def _do_save(self, save_as: bool):
         if not self.org_pages:
-            self.win.snack("No quedan páginas", "error"); return
+            self.win.snack(tr("No quedan páginas"), "error"); return
         pages = [{
             "path": self.win.uploaded_files[pg["file_idx"]]["path"],
             "page_idx": pg["page_idx"],
@@ -324,7 +303,7 @@ class OrganizePage(QWidget):
         first_name = Path(self.win.uploaded_files[first_fi]["name"]).stem
         out_name = f"{first_name}_Organized.pdf"
         if save_as:
-            dest, _ = QFileDialog.getSaveFileName(self, "Guardar como", out_name, "PDF (*.pdf)")
+            dest, _ = QFileDialog.getSaveFileName(self, tr("Guardar como"), out_name, "PDF (*.pdf)")
             if not dest:
                 return
         else:

@@ -8,7 +8,6 @@ Sin dependencias de interfaz (numpy, Pillow y PyMuPDF).
 import io
 import math
 
-import fitz
 import numpy as np
 from PIL import Image, ImageFilter
 
@@ -360,22 +359,6 @@ def _fix_one(doc, page_idx: int, corners_frac, snap: str, flatten: bool, straigh
     new.insert_image(new.rect, stream=buf.getvalue())
     doc.delete_page(page_idx)
     return {"size": size, "angle": float(angle), "warped": bool(corners)}
-
-
-def fix_page(path: str, page_idx: int, corners_frac: list, snap: str = "auto", flatten: bool = True,
-             password: str = "", straighten: bool = True) -> dict:
-    """Corrige la perspectiva de una página y la sustituye por la versión plana y recta. `corners_frac` son las
-    cuatro esquinas [TL, TR, BR, BL] como fracción (0–1) del ancho y alto de la página. Devuelve {"out", "size", "angle"}."""
-    doc = pt._open(path, password)
-    try:
-        if not 0 <= page_idx < len(doc):
-            raise pt.ToolError("Esa página no existe.")
-        res = _fix_one(doc, page_idx, corners_frac, snap, flatten, straighten, True)
-        dest = pt.out_path(path, "_enderezado")
-        doc.save(str(dest), garbage=3, deflate=True)
-    finally:
-        doc.close()
-    return {"out": str(dest), "size": res["size"], "angle": res["angle"]}
 
 
 def straighten_pages(path: str, password: str = "", only_scanned: bool = True, flatten: bool = True,

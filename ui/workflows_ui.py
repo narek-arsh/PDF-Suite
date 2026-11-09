@@ -1,28 +1,21 @@
 # -*- coding: utf-8 -*-
 """Workflows: editor, preguntas al ejecutar y lista."""
 import copy
-import shutil
-import time
-import os
-import sys
-import tempfile
-import threading
-from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QSize
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QWidget,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QHBoxLayout,
+    QVBoxLayout,
+    QListWidget,
+    QListWidgetItem,
+    QFrame,
+    QCheckBox,
+    QDialog,
+    QMessageBox,
 )
 
 try:
@@ -31,23 +24,9 @@ try:
 except ImportError:
     HAS_SVG = False
 
-import backend as be
-import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
-import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
 import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from theme import DANGER
+from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
@@ -61,19 +40,19 @@ class WorkflowEditorDialog(QDialog):
     def __init__(self, steps: list[dict], name: str = "", parent=None,
                  title: str = "Guardar como workflow"):
         super().__init__(parent)
-        self.setWindowTitle(title)
+        self.setWindowTitle(tr(title))
         self.resize(640, 600)
         self.steps = [copy.deepcopy(s) for s in steps]
         self.name = ""
 
         root = QVBoxLayout(self)
-        root.addWidget(QLabel("Nombre del workflow:"))
+        root.addWidget(QLabel(tr("Nombre del workflow:")))
         self.name_field = QLineEdit(name)
-        self.name_field.setPlaceholderText("p.ej. Enviar a cliente")
+        self.name_field.setPlaceholderText(tr("p.ej. Enviar a cliente"))
         root.addWidget(self.name_field)
 
-        hint = QLabel("Estos pasos se aplicarán, en orden, a cada archivo que subas "
-                       "(«Unir archivos» junta todos en uno). Quita los que no quieras.")
+        hint = QLabel(tr("Estos pasos se aplicarán, en orden, a cada archivo que subas "
+                       "(«Unir archivos» junta todos en uno). Quita los que no quieras."))
         hint.setObjectName("Hint"); hint.setWordWrap(True)
         root.addWidget(hint)
 
@@ -83,18 +62,18 @@ class WorkflowEditorDialog(QDialog):
         root.addWidget(self.list, 1)
 
         row = QHBoxLayout()
-        up_btn = QPushButton("Subir");  up_btn.clicked.connect(lambda: self._move(-1))
-        down_btn = QPushButton("Bajar"); down_btn.clicked.connect(lambda: self._move(1))
-        del_btn = _btn("Quitar paso", "trash", "Danger", icon_color=DANGER)
+        up_btn = QPushButton(tr("Subir"));  up_btn.clicked.connect(lambda: self._move(-1))
+        down_btn = QPushButton(tr("Bajar")); down_btn.clicked.connect(lambda: self._move(1))
+        del_btn = _btn(tr("Quitar paso"), "trash", "Danger", icon_color=DANGER)
         del_btn.clicked.connect(self._remove)
         row.addWidget(up_btn); row.addWidget(down_btn); row.addStretch(1); row.addWidget(del_btn)
         root.addLayout(row)
 
         self.ask_card = QFrame(); self.ask_card.setObjectName("Card")
         ask_lay = QVBoxLayout(self.ask_card)
-        t = QLabel("Preguntar al ejecutar"); t.setObjectName("SectionTitle")
+        t = QLabel(tr("Preguntar al ejecutar")); t.setObjectName("SectionTitle")
         ask_lay.addWidget(t)
-        ask_hint = QLabel("Marca lo que cambia en cada archivo: se te pedirá al lanzar el workflow.")
+        ask_hint = QLabel(tr("Marca lo que cambia en cada archivo: se te pedirá al lanzar el workflow."))
         ask_hint.setObjectName("Hint"); ask_hint.setWordWrap(True)
         ask_lay.addWidget(ask_hint)
         self.ask_box = QVBoxLayout()
@@ -102,8 +81,8 @@ class WorkflowEditorDialog(QDialog):
         root.addWidget(self.ask_card)
 
         btns = QHBoxLayout()
-        save_btn = _btn("Guardar", "save", "Primary")
-        cancel_btn = QPushButton("Cancelar")
+        save_btn = _btn(tr("Guardar"), "save", "Primary")
+        cancel_btn = QPushButton(tr("Cancelar"))
         save_btn.clicked.connect(self._save)
         cancel_btn.clicked.connect(self.reject)
         btns.addStretch(1); btns.addWidget(cancel_btn); btns.addWidget(save_btn)
@@ -137,13 +116,14 @@ class WorkflowEditorDialog(QDialog):
         step = self.steps[row]
         names = self._askable(step)
         if not names:
-            lbl = QLabel("Este paso no tiene valores de texto que preguntar.")
+            lbl = QLabel(tr("Este paso no tiene valores de texto que preguntar."))
             lbl.setObjectName("Hint")
             self.ask_box.addWidget(lbl)
             return
         for name in names:
             label = wf.PROMPTABLE[step["type"]][name]
-            cb = QCheckBox(f"{label}  (valor guardado: «{step['params'].get(name, '')}»)")
+            cb = QCheckBox(tr("{label}  (valor guardado: «{value}»)",
+                               label=label, value=step['params'].get(name, '')))
             cb.setChecked(name in step.get("ask", []))
             cb.toggled.connect(lambda on, n=name, r=row: self._toggle_ask(r, n, on))
             self.ask_box.addWidget(cb)
@@ -172,9 +152,9 @@ class WorkflowEditorDialog(QDialog):
     def _save(self):
         name = self.name_field.text().strip()
         if not name:
-            QMessageBox.warning(self, "Falta el nombre", "Ponle un nombre al workflow."); return
+            QMessageBox.warning(self, tr("Falta el nombre"), tr("Ponle un nombre al workflow.")); return
         if not self.steps:
-            QMessageBox.warning(self, "Sin pasos", "El workflow no tiene ningún paso."); return
+            QMessageBox.warning(self, tr("Sin pasos"), tr("El workflow no tiene ningún paso.")); return
         self.name = name
         self.accept()
 
@@ -183,25 +163,27 @@ class AskValuesDialog(QDialog):
     """Pide, al ejecutar, los valores marcados como 'preguntar al ejecutar'."""
     def __init__(self, workflow: dict, fields: list[tuple[int, str, str]], parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f"Ejecutar: {workflow['name']}")
+        self.setWindowTitle(tr("Ejecutar: {name}", name=workflow['name']))
         self.resize(520, 200)
         self.values: dict[int, dict] = {}
         self._fields = fields
         self._edits: list[QLineEdit] = []
         root = QVBoxLayout(self)
-        intro = QLabel("Rellena los valores de esta vez:")
+        intro = QLabel(tr("Rellena los valores de esta vez:"))
         intro.setObjectName("Hint")
         root.addWidget(intro)
         for si, name, label in fields:
             step = workflow["steps"][si]
-            lbl = QLabel(f"{label}  ·  paso {si + 1}: {wf.STEP_LABELS.get(step['type'], step['type'])}")
+            lbl = QLabel(tr("{label}  ·  paso {n}: {step_label}",
+                             label=label, n=si + 1,
+                             step_label=wf.STEP_LABELS.get(step['type'], step['type'])))
             edit = QLineEdit(step["params"].get(name, ""))
             root.addWidget(lbl)
             root.addWidget(edit)
             self._edits.append(edit)
         btns = QHBoxLayout()
-        run_btn = _btn("Ejecutar", "play", "Primary")
-        cancel_btn = QPushButton("Cancelar")
+        run_btn = _btn(tr("Ejecutar"), "play", "Primary")
+        cancel_btn = QPushButton(tr("Cancelar"))
         run_btn.clicked.connect(self._ok)
         cancel_btn.clicked.connect(self.reject)
         btns.addStretch(1); btns.addWidget(cancel_btn); btns.addWidget(run_btn)
@@ -215,7 +197,7 @@ class AskValuesDialog(QDialog):
         for (si, name, label), edit in zip(self._fields, self._edits):
             text = edit.text()
             if name in ("buscar", "texto") and not text.strip():
-                QMessageBox.warning(self, "Falta un valor", f"«{label}» no puede estar vacío.")
+                QMessageBox.warning(self, tr("Falta un valor"), tr("«{label}» no puede estar vacío.", label=label))
                 edit.setFocus(); return
             out.setdefault(si, {})[name] = text
         self.values = out
@@ -229,11 +211,11 @@ class WorkflowsPage(QWidget):
         self._wfs: list[dict] = []
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.addWidget(BackHeader("Workflows", lambda: win.go_home()))
+        root.addWidget(BackHeader(tr("Workflows"), lambda: win.go_home()))
 
-        hint = QLabel("Secuencias de pasos guardadas. Elige una, sube los archivos y se ejecuta sola. "
+        hint = QLabel(tr("Secuencias de pasos guardadas. Elige una, sube los archivos y se ejecuta sola. "
                        "Para crear una: aplica tus herramientas como siempre y pulsa "
-                       "«Guardar como workflow» en la pantalla principal.")
+                       "«Guardar como workflow» en la pantalla principal."))
         hint.setObjectName("Hint"); hint.setWordWrap(True)
         root.addWidget(hint)
 
@@ -243,15 +225,15 @@ class WorkflowsPage(QWidget):
         self.list.itemDoubleClicked.connect(lambda *_: self._run())
         root.addWidget(self.list, 1)
 
-        self.empty_lbl = QLabel("Todavía no hay ningún workflow guardado.")
+        self.empty_lbl = QLabel(tr("Todavía no hay ningún workflow guardado."))
         self.empty_lbl.setObjectName("Hint")
         self.empty_lbl.setAlignment(Qt.AlignCenter)
         root.addWidget(self.empty_lbl)
 
         row = QHBoxLayout()
-        run_btn = _btn("Ejecutar", "play", "Primary")
-        edit_btn = _btn("Editar", "pencil")
-        del_btn = _btn("Borrar", "trash", "Danger", icon_color=DANGER)
+        run_btn = _btn(tr("Ejecutar"), "play", "Primary")
+        edit_btn = _btn(tr("Editar"), "pencil")
+        del_btn = _btn(tr("Borrar"), "trash", "Danger", icon_color=DANGER)
         run_btn.clicked.connect(self._run)
         edit_btn.clicked.connect(self._edit)
         del_btn.clicked.connect(self._delete)
@@ -288,25 +270,25 @@ class WorkflowsPage(QWidget):
     def _run(self):
         w = self._current()
         if not w:
-            self.win.snack("Elige un workflow", "error"); return
+            self.win.snack(tr("Elige un workflow"), "error"); return
         self.win.run_workflow(w)
 
     def _edit(self):
         w = self._current()
         if not w:
-            self.win.snack("Elige un workflow", "error"); return
+            self.win.snack(tr("Elige un workflow"), "error"); return
         dlg = WorkflowEditorDialog(w["steps"], w["name"], self, title="Editar workflow")
         if dlg.exec() == QDialog.Accepted:
             w["name"], w["steps"] = dlg.name, dlg.steps
             wf.save_workflows(self._wfs)
             self.populate()
-            self.win.snack(f"✓ Workflow «{w['name']}» actualizado")
+            self.win.snack(tr("✓ Workflow «{name}» actualizado", name=w['name']))
 
     def _delete(self):
         w = self._current()
         if not w:
             return
-        ans = QMessageBox.question(self, "Borrar workflow", f"¿Borrar «{w['name']}»?")
+        ans = QMessageBox.question(self, tr("Borrar workflow"), tr("¿Borrar «{name}»?", name=w['name']))
         if ans == QMessageBox.Yes:
             self._wfs.remove(w)
             wf.save_workflows(self._wfs)

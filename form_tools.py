@@ -50,15 +50,6 @@ def widgets_of(doc, page_idx: int) -> list[dict]:
         return []
 
 
-def widget_at(doc, page_idx: int, pt: tuple) -> dict | None:
-    hit = None
-    for d in widgets_of(doc, page_idx):
-        r = d["rect"]
-        if r[0] <= pt[0] <= r[2] and r[1] <= pt[1] <= r[3]:
-            hit = d
-    return hit
-
-
 def has_fields(doc) -> bool:
     try:
         return any(True for i in range(len(doc)) for _ in (doc[i].widgets() or []))

@@ -1,28 +1,20 @@
 # -*- coding: utf-8 -*-
 """Pantallas Tamaño y márgenes y Varias por hoja (N-Up)."""
-import copy
-import shutil
-import time
-import os
-import sys
 import tempfile
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QWidget,
+    QLabel,
+    QHBoxLayout,
+    QVBoxLayout,
+    QFrame,
+    QComboBox,
+    QCheckBox,
+    QRadioButton,
+    QButtonGroup,
+    QSpinBox,
+    QDoubleSpinBox,
 )
 
 try:
@@ -32,26 +24,11 @@ except ImportError:
     HAS_SVG = False
 
 import backend as be
-import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
-import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
-import workflows as wf
-import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+from i18n import tr
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from pdf_qt import MainWindow
-from ui.common import _btn, add_shadow
+from ui.common import _btn, add_shadow, ask_scope
 from ui.widgets import BackHeader, PreviewPanel
 
 
@@ -61,15 +38,19 @@ class SizeMarginsPage(QWidget):
         self.win = win
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.addWidget(BackHeader("Tamaño y márgenes", lambda: win.go_home()))
+        root.addWidget(BackHeader(tr("Tamaño y márgenes"), lambda: win.go_home()))
 
-        root.addWidget(QLabel("Archivo:"))
+        self.file_row = QWidget()
+        fr = QHBoxLayout(self.file_row)
+        fr.setContentsMargins(0, 0, 0, 0)
+        fr.addWidget(QLabel(tr("Archivo:")))
         self.file_combo = QComboBox()
-        root.addWidget(self.file_combo)
+        fr.addWidget(self.file_combo, 1)
+        root.addWidget(self.file_row)
 
         self._mode = "size"
-        self.preview = PreviewPanel(self._render_preview, "Página")
-        self.preview.set_caption("Vista previa · tamaño")
+        self.preview = PreviewPanel(self._render_preview, tr("Página"))
+        self.preview.set_caption(tr("Vista previa · tamaño"))
         self.file_combo.currentIndexChanged.connect(self.refresh_preview)
         body = QHBoxLayout(); body.setSpacing(16)
         left = QVBoxLayout()
@@ -78,7 +59,7 @@ class SizeMarginsPage(QWidget):
         size_card = QFrame(); size_card.setObjectName("Card")
         add_shadow(size_card, blur=18, dy=4, alpha=70)
         sc = QVBoxLayout(size_card)
-        title1 = QLabel("Cambiar tamaño de página"); title1.setObjectName("SectionTitle")
+        title1 = QLabel(tr("Cambiar tamaño de página")); title1.setObjectName("SectionTitle")
         sc.addWidget(title1)
 
         self.size_combo = QComboBox()
@@ -94,16 +75,16 @@ class SizeMarginsPage(QWidget):
         self.custom_w.setValue(210); self.custom_w.setSuffix(" mm")
         self.custom_h = QDoubleSpinBox(); self.custom_h.setRange(10, 2000)
         self.custom_h.setValue(297); self.custom_h.setSuffix(" mm")
-        custom_row.addWidget(QLabel("Ancho:")); custom_row.addWidget(self.custom_w)
-        custom_row.addWidget(QLabel("Alto:"));  custom_row.addWidget(self.custom_h)
+        custom_row.addWidget(QLabel(tr("Ancho:"))); custom_row.addWidget(self.custom_w)
+        custom_row.addWidget(QLabel(tr("Alto:")));  custom_row.addWidget(self.custom_h)
         self.custom_row_widget.setVisible(False)
         self.custom_w.valueChanged.connect(lambda *_: self._touch("size"))
         self.custom_h.valueChanged.connect(lambda *_: self._touch("size"))
         sc.addWidget(self.custom_row_widget)
 
         fit_row = QHBoxLayout()
-        self.fit_scale_radio  = QRadioButton("Escalar contenido para llenar la hoja")
-        self.fit_center_radio = QRadioButton("Mantener tamaño original y centrar")
+        self.fit_scale_radio  = QRadioButton(tr("Escalar contenido para llenar la hoja"))
+        self.fit_center_radio = QRadioButton(tr("Mantener tamaño original y centrar"))
         self.fit_scale_radio.setChecked(True)
         fgroup = QButtonGroup(self)
         fgroup.addButton(self.fit_scale_radio); fgroup.addButton(self.fit_center_radio)
@@ -111,7 +92,7 @@ class SizeMarginsPage(QWidget):
         self.fit_scale_radio.toggled.connect(lambda *_: self._touch("size"))
         sc.addLayout(fit_row)
 
-        resize_btn = _btn("Aplicar tamaño", "resize", "Primary")
+        resize_btn = _btn(tr("Aplicar tamaño"), "resize", "Primary")
         resize_btn.clicked.connect(self._do_resize)
         sc.addWidget(resize_btn)
         left.addWidget(size_card)
@@ -120,10 +101,10 @@ class SizeMarginsPage(QWidget):
         margin_card = QFrame(); margin_card.setObjectName("Card")
         add_shadow(margin_card, blur=18, dy=4, alpha=70)
         mc = QVBoxLayout(margin_card)
-        title2 = QLabel("Cambiar márgenes"); title2.setObjectName("SectionTitle")
+        title2 = QLabel(tr("Cambiar márgenes")); title2.setObjectName("SectionTitle")
         mc.addWidget(title2)
-        hint = QLabel("Valores positivos añaden margen en blanco en ese borde; "
-                       "valores negativos recortan ese borde de la página.")
+        hint = QLabel(tr("Valores positivos añaden margen en blanco en ese borde; "
+                       "valores negativos recortan ese borde de la página."))
         hint.setObjectName("Hint"); hint.setWordWrap(True)
         mc.addWidget(hint)
 
@@ -132,8 +113,8 @@ class SizeMarginsPage(QWidget):
         self.margin_bottom = self._mm_spin()
         self.margin_left   = self._mm_spin()
         self.margin_right  = self._mm_spin()
-        for label, field in (("Arriba", self.margin_top), ("Abajo", self.margin_bottom),
-                              ("Izquierda", self.margin_left), ("Derecha", self.margin_right)):
+        for label, field in ((tr("Arriba"), self.margin_top), (tr("Abajo"), self.margin_bottom),
+                              (tr("Izquierda"), self.margin_left), (tr("Derecha"), self.margin_right)):
             col = QVBoxLayout()
             lbl = QLabel(label); lbl.setObjectName("Hint")
             col.addWidget(lbl)
@@ -143,7 +124,7 @@ class SizeMarginsPage(QWidget):
         for sp in (self.margin_top, self.margin_bottom, self.margin_left, self.margin_right):
             sp.valueChanged.connect(lambda *_: self._touch("margins"))
 
-        margin_btn = _btn("Aplicar márgenes", "crop", "Primary")
+        margin_btn = _btn(tr("Aplicar márgenes"), "crop", "Primary")
         margin_btn.clicked.connect(self._do_margins)
         mc.addWidget(margin_btn)
         left.addWidget(margin_card)
@@ -154,8 +135,8 @@ class SizeMarginsPage(QWidget):
 
     def _touch(self, mode: str):
         self._mode = mode
-        self.preview.set_caption("Vista previa · tamaño" if mode == "size"
-                                  else "Vista previa · márgenes")
+        self.preview.set_caption(tr("Vista previa · tamaño") if mode == "size"
+                                  else tr("Vista previa · márgenes"))
         self.preview.schedule()
 
     def refresh_preview(self, *_):
@@ -188,6 +169,7 @@ class SizeMarginsPage(QWidget):
         self.custom_row_widget.setVisible(text == "Personalizado")
 
     def populate(self):
+        self.file_row.setVisible(len(self.win.uploaded_files) > 1)
         self.file_combo.blockSignals(True)
         self.file_combo.clear()
         for f in self.win.uploaded_files:
@@ -200,44 +182,63 @@ class SizeMarginsPage(QWidget):
             return None
         return self.win.uploaded_files[idx]
 
-    def _do_resize(self):
+    def _targets(self, scope: str) -> list:
+        if scope == "all":
+            return list(self.win.uploaded_files)
+        f = self._selected_file()
+        return [f] if f else []
+
+    def _batch(self, call, start_msg: str, ok_label: str):
         f = self._selected_file()
         if not f:
-            self.win.snack("Selecciona un archivo", "error"); return
+            self.win.snack(tr("Selecciona un archivo"), "error"); return
+        scope = ask_scope(self, self.win, f["name"])
+        if not scope:
+            return
+        targets = self._targets(scope)
+        oks, fails = [], []
+        for t in targets:
+            out = call(t)
+            (oks if out else fails).append(t)
+        self.populate()
+        self.refresh_preview()
+        if oks:
+            msg = tr("✓ {ok_label} en {n} archivo{s}.", ok_label=ok_label, n=len(oks),
+                     s=('s' if len(oks) != 1 else ''))
+            if fails:
+                msg += tr(" ({n} con error)", n=len(fails))
+            self.win.snack(msg, "success" if not fails else "info")
+        else:
+            self.win.snack(tr("No se pudo: {label}.", label=ok_label.lower()), "error")
+
+    def _do_resize(self):
         size_name = self.size_combo.currentText()
         fit_mode = "scale" if self.fit_scale_radio.isChecked() else "center"
-        out = be.resize_pdf(f["path"], size_name, fit_mode,
-                             custom_w_mm=self.custom_w.value(), custom_h_mm=self.custom_h.value())
-        if out:
-            self.win.record_step("resize", {
-                "size_name": size_name, "fit_mode": fit_mode,
-                "custom_w_mm": self.custom_w.value(), "custom_h_mm": self.custom_h.value()})
-            self.win.replace_file(f, out)
-            self.populate()
-            self.refresh_preview()
-            self.win.snack(f"✓ Tamaño aplicado: {Path(out).name}")
-        else:
-            self.win.snack("No se pudo cambiar el tamaño", "error")
+
+        def call(f):
+            out = be.resize_pdf(f["path"], size_name, fit_mode,
+                                custom_w_mm=self.custom_w.value(), custom_h_mm=self.custom_h.value())
+            if out:
+                self.win.record_step("resize", {
+                    "size_name": size_name, "fit_mode": fit_mode,
+                    "custom_w_mm": self.custom_w.value(), "custom_h_mm": self.custom_h.value()})
+                self.win.replace_file(f, out)
+            return out
+        self._batch(call, tr("Cambiando tamaño…"), tr("Tamaño aplicado"))
 
     def _do_margins(self):
-        f = self._selected_file()
-        if not f:
-            self.win.snack("Selecciona un archivo", "error"); return
-        out = be.adjust_margins_pdf(
-            f["path"], top_mm=self.margin_top.value(), bottom_mm=self.margin_bottom.value(),
-            left_mm=self.margin_left.value(), right_mm=self.margin_right.value())
-        if out:
-            self.win.record_step("margins", {
-                "top_mm": self.margin_top.value(), "bottom_mm": self.margin_bottom.value(),
-                "left_mm": self.margin_left.value(), "right_mm": self.margin_right.value()})
-            self.win.replace_file(f, out)
-            self.populate()
-            for sp in (self.margin_top, self.margin_bottom, self.margin_left, self.margin_right):
-                sp.setValue(0.0)
-            self.refresh_preview()
-            self.win.snack(f"✓ Márgenes aplicados: {Path(out).name}")
-        else:
-            self.win.snack("No se pudieron aplicar los márgenes", "error")
+        top, bottom, left, right = (self.margin_top.value(), self.margin_bottom.value(),
+                                    self.margin_left.value(), self.margin_right.value())
+
+        def call(f):
+            out = be.adjust_margins_pdf(f["path"], top_mm=top, bottom_mm=bottom, left_mm=left, right_mm=right)
+            if out:
+                self.win.record_step("margins", {"top_mm": top, "bottom_mm": bottom, "left_mm": left, "right_mm": right})
+                self.win.replace_file(f, out)
+            return out
+        self._batch(call, tr("Aplicando márgenes…"), tr("Márgenes aplicados"))
+        for sp in (self.margin_top, self.margin_bottom, self.margin_left, self.margin_right):
+            sp.setValue(0.0)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -249,9 +250,9 @@ class NUpPage(QWidget):
         self.win = win
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
-        root.addWidget(BackHeader("N-Up – Varias páginas por hoja", lambda: win.go_home()))
+        root.addWidget(BackHeader(tr("N-Up – Varias páginas por hoja"), lambda: win.go_home()))
 
-        self.file_lbl = QLabel("Archivo:")
+        self.file_lbl = QLabel(tr("Archivo:"))
         root.addWidget(self.file_lbl)
         self.file_combo = QComboBox()
         root.addWidget(self.file_combo)
@@ -259,8 +260,8 @@ class NUpPage(QWidget):
         self._merge_key: tuple | None = None
         self._merge_info: dict | None = None
 
-        self.preview = PreviewPanel(self._render_preview, "Hoja")
-        self.preview.set_caption("Vista previa · hoja de salida")
+        self.preview = PreviewPanel(self._render_preview, tr("Hoja"))
+        self.preview.set_caption(tr("Vista previa · hoja de salida"))
         self.file_combo.currentIndexChanged.connect(self.refresh_preview)
         body = QHBoxLayout(); body.setSpacing(16)
         left = QVBoxLayout()
@@ -276,15 +277,15 @@ class NUpPage(QWidget):
         self.rows_spin.valueChanged.connect(self._update_total_label)
         self.cols_spin.valueChanged.connect(self.refresh_preview)
         self.rows_spin.valueChanged.connect(self.refresh_preview)
-        grid_row.addWidget(QLabel("Columnas:")); grid_row.addWidget(self.cols_spin)
-        grid_row.addWidget(QLabel("Filas:"));    grid_row.addWidget(self.rows_spin)
+        grid_row.addWidget(QLabel(tr("Columnas:"))); grid_row.addWidget(self.cols_spin)
+        grid_row.addWidget(QLabel(tr("Filas:")));    grid_row.addWidget(self.rows_spin)
         c.addLayout(grid_row)
 
         self.total_label = QLabel()
         self.total_label.setObjectName("Hint")
         c.addWidget(self.total_label)
 
-        c.addWidget(QLabel("Tamaño de la hoja de salida:"))
+        c.addWidget(QLabel(tr("Tamaño de la hoja de salida:")))
         self.size_combo = QComboBox()
         self.size_combo.addItems(["A4", "A5", "A3", "Carta (Letter)", "Legal", "Personalizado"])
         self.size_combo.currentTextChanged.connect(self._on_size_choice_changed)
@@ -298,39 +299,39 @@ class NUpPage(QWidget):
         self.custom_w.setValue(297); self.custom_w.setSuffix(" mm")
         self.custom_h = QDoubleSpinBox(); self.custom_h.setRange(10, 2000)
         self.custom_h.setValue(210); self.custom_h.setSuffix(" mm")
-        custom_row.addWidget(QLabel("Ancho:")); custom_row.addWidget(self.custom_w)
-        custom_row.addWidget(QLabel("Alto:"));  custom_row.addWidget(self.custom_h)
+        custom_row.addWidget(QLabel(tr("Ancho:"))); custom_row.addWidget(self.custom_w)
+        custom_row.addWidget(QLabel(tr("Alto:")));  custom_row.addWidget(self.custom_h)
         self.custom_row_widget.setVisible(False)
         self.custom_w.valueChanged.connect(lambda *_: self.preview.schedule())
         self.custom_h.valueChanged.connect(lambda *_: self.preview.schedule())
         c.addWidget(self.custom_row_widget)
 
         orient_row = QHBoxLayout()
-        orient_row.addWidget(QLabel("Orientación de la hoja:"))
+        orient_row.addWidget(QLabel(tr("Orientación de la hoja:")))
         self.orient_combo = QComboBox()
-        self.orient_combo.addItem("Automática", "auto")
-        self.orient_combo.addItem("Vertical", "portrait")
-        self.orient_combo.addItem("Horizontal", "landscape")
-        self.orient_combo.setToolTip("Automática: elige la orientación en la que las páginas salen más grandes")
+        self.orient_combo.addItem(tr("Automática"), "auto")
+        self.orient_combo.addItem(tr("Vertical"), "portrait")
+        self.orient_combo.addItem(tr("Horizontal"), "landscape")
+        self.orient_combo.setToolTip(tr("Automática: elige la orientación en la que las páginas salen más grandes"))
         self.orient_combo.currentIndexChanged.connect(lambda *_: self.preview.schedule())
         orient_row.addWidget(self.orient_combo, 1)
         c.addLayout(orient_row)
 
-        self.rotate_check = QCheckBox("Girar páginas para aprovechar mejor la hoja")
+        self.rotate_check = QCheckBox(tr("Girar páginas para aprovechar mejor la hoja"))
         self.rotate_check.setChecked(True)
-        self.rotate_check.setToolTip("Si una página llena mejor su celda girada 90°, se gira "
-                                     "(útil con documentos de páginas mezcladas)")
+        self.rotate_check.setToolTip(tr("Si una página llena mejor su celda girada 90°, se gira "
+                                     "(útil con documentos de páginas mezcladas)"))
         self.rotate_check.toggled.connect(lambda *_: self.preview.schedule())
         c.addWidget(self.rotate_check)
 
         gap_row = QHBoxLayout()
-        gap_row.addWidget(QLabel("Espacio entre páginas:"))
+        gap_row.addWidget(QLabel(tr("Espacio entre páginas:")))
         self.gap_spin = QDoubleSpinBox()
         self.gap_spin.setDecimals(1)
         self.gap_spin.setSingleStep(0.5)
         self.gap_spin.setRange(-0.5, 30)
         self.gap_spin.setSuffix(" mm")
-        self.gap_spin.setSpecialValueText("Auto")
+        self.gap_spin.setSpecialValueText(tr("Auto"))
         self.gap_spin.setValue(-0.5)
         gap_row.addWidget(self.gap_spin)
         self.gap_spin.valueChanged.connect(lambda *_: self.preview.schedule())
@@ -338,7 +339,7 @@ class NUpPage(QWidget):
 
         left.addWidget(card)
 
-        apply_btn = _btn("Aplicar N-Up", "nup", "Primary")
+        apply_btn = _btn(tr("Aplicar N-Up"), "nup", "Primary")
         apply_btn.clicked.connect(self._do_nup)
         left.addWidget(apply_btn)
         left.addStretch(1)
@@ -350,7 +351,7 @@ class NUpPage(QWidget):
 
     def _update_total_label(self, *_):
         n = self.cols_spin.value() * self.rows_spin.value()
-        self.total_label.setText(f"= {n} página(s) por hoja")
+        self.total_label.setText(tr("= {n} página(s) por hoja", n=n))
 
     def _gap_value(self) -> float | None:
         """None = 'Auto' (valor mínimo del campo, que se muestra como texto)."""
@@ -365,7 +366,7 @@ class NUpPage(QWidget):
                            self.custom_h.value(), self.cols_spin.value(), self.rows_spin.value(),
                            orientation)
         self.gap_spin.setToolTip(
-            f"Auto: ahora {v:.1f} mm (3 mm, reducido hasta 0 si la cuadrícula necesita el sitio)")
+            tr("Auto: ahora {v:.1f} mm (3 mm, reducido hasta 0 si la cuadrícula necesita el sitio)", v=v))
 
     def _source(self) -> dict | None:
         """Con varios archivos cargados, N-Up trabaja sobre su unión (en el
@@ -391,8 +392,8 @@ class NUpPage(QWidget):
         src = self._source()
         pages = src["pages"] if src else 1
         self.file_lbl.setText(
-            f"Se unirán {n_files} archivos en el orden de la lista ({pages} páginas) "
-            "y después se aplicará N-Up" if multi else "Archivo:")
+            tr("Se unirán {n_files} archivos en el orden de la lista ({pages} páginas) "
+            "y después se aplicará N-Up", n_files=n_files, pages=pages) if multi else tr("Archivo:"))
         per_sheet = self.cols_spin.value() * self.rows_spin.value()
         self.preview.set_total(-(-pages // per_sheet))
         self.preview.schedule()
@@ -407,7 +408,8 @@ class NUpPage(QWidget):
             self._gap_value(), self._orientation(), self.rotate_check.isChecked())
         self._update_gap_tooltip(ori)
         self.preview.set_caption(
-            f"Vista previa · hoja {'horizontal' if ori == 'landscape' else 'vertical'}")
+            tr("Vista previa · hoja {orient}",
+               orient=tr("horizontal") if ori == "landscape" else tr("vertical")))
         return be.preview_nup_png(
             f["path"], idx, self.cols_spin.value(), self.rows_spin.value(),
             size_name=self.size_combo.currentText(),
@@ -434,7 +436,7 @@ class NUpPage(QWidget):
     def _do_nup(self):
         f = self._source()
         if not f:
-            self.win.snack("Selecciona un archivo", "error"); return
+            self.win.snack(tr("Selecciona un archivo"), "error"); return
         multi = len(self.win.uploaded_files) > 1
         out = be.n_up_pdf(
             f["path"], cols=self.cols_spin.value(), rows=self.rows_spin.value(),
@@ -457,6 +459,6 @@ class NUpPage(QWidget):
             self.win.replace_file(f, out)
             self.populate()
             self.refresh_preview()
-            self.win.snack(f"✓ N-Up aplicado: {Path(out).name}")
+            self.win.snack(tr("✓ N-Up aplicado: {name}", name=Path(out).name))
         else:
-            self.win.snack("No se pudo aplicar N-Up", "error")
+            self.win.snack(tr("No se pudo aplicar N-Up"), "error")

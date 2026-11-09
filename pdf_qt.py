@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-PDF Manager – Travel Agent Edition (PySide6)
+PDF Manager by Provecto (PySide6)
 Ventana principal y arranque. Las pantallas viven en el paquete ui/; la lógica de PDF, en backend.py y pdf_tools.py.
 """
 import copy
@@ -9,23 +9,20 @@ import time
 import os
 import sys
 import tempfile
-import threading
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QUrl, QTimer, QEvent, QPoint, QPointF, Signal, QThread, QObject
-from PySide6.QtGui import (
-    QPixmap, QIcon, QImage, QPainter, QColor, QFont, QFontMetrics, QPen,
-    QDesktopServices, QBrush, QShortcut, QKeySequence, QCursor, QFontDatabase,
-    QTextBlockFormat, QTextCursor, QTextCharFormat, QTextFormat, QPainterPath,
-)
+from PySide6.QtCore import Qt, QRectF, QUrl, QTimer, Signal
+from PySide6.QtGui import QIcon, QPainter, QColor, QDesktopServices, QBrush, QLinearGradient, QRadialGradient
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QLabel, QLineEdit, QPushButton,
-    QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QFileDialog,
-    QFrame, QStackedWidget, QComboBox, QCheckBox, QRadioButton, QButtonGroup,
-    QSpinBox, QDoubleSpinBox, QSlider, QDialog, QMessageBox, QAbstractItemView,
-    QGraphicsDropShadowEffect, QMenu, QStatusBar, QTextEdit, QInputDialog, QSizePolicy,
-    QTabWidget, QGraphicsView, QGraphicsScene, QGraphicsRectItem, QProgressDialog,
-    QStyle, QGraphicsItem, QStyleOptionSlider, QColorDialog, QGridLayout, QProgressBar,
+    QApplication,
+    QMainWindow,
+    QFileDialog,
+    QStackedWidget,
+    QDialog,
+    QMessageBox,
+    QStatusBar,
+    QInputDialog,
+    QProgressDialog,
 )
 
 try:
@@ -35,24 +32,16 @@ except ImportError:
     HAS_SVG = False
 
 import backend as be
-import icons as ic
-import winfonts
-import fontmanager as fm
-import annot_tools as at
-import signature_pad as sp
-import form_tools as ft
-import stamp_tool as st_
-from PySide6.QtWidgets import QPlainTextEdit, QSplitter, QScrollArea
 import pdf_tools as ptl
-import layout_tools as lt
-import photo_fix as pf
 import workflows as wf
 import draft as dr
-import click_icons as ci
-from theme import QSS, BG, SURFACE, SURFACE_2, SURFACE_3, TEXT, TEXT_SOFT, ACCENT, BORDER, BORDER_STRONG, DANGER
-from flow_layout import FlowLayout
+import theme
+from theme import QSS, BG_GRAD_TOP, BG_GRAD_BOTTOM, ORB1, ORB2, ORB3
+import i18n
+from i18n import tr
 from ui.ajuste import AjusteDialog, AjusteMultiDialog
-from ui.common import _GUI_BRIDGE, _GuiBridge, init_bridge, run_bg
+from ui.common import init_bridge, run_bg
+from ui.compare import ComparePage
 from ui.edit_page import EditPage
 from ui.home import HomePage
 from ui.metadata import MetadataPage
@@ -83,7 +72,7 @@ class MainWindow(QMainWindow):
         self.saved_upto = 0          # cuántos pasos de la sesión ya están guardados
         self.saved_name = ""
         self.saved_id = ""           # workflow al que se pueden añadir los pasos nuevos
-        self.setWindowTitle("PDF Manager – Travel Agent Edition")
+        self.setWindowTitle("PDF Manager by Provecto")
         self.setMinimumSize(480, 480)
         self.resize(1080, 820)
         icon_path = be.resource_path("provecto_icon.ico")
@@ -109,11 +98,12 @@ class MainWindow(QMainWindow):
         self.workflows_page = WorkflowsPage(self)
         self.tools_page = ToolsPage(self)
         self.pick_page = PickFilePage(self)
+        self.compare_page = ComparePage(self)
 
         for p in (self.home_page, self.organize_page,
                   self.edit_page, self.metadata_page, self.split_page,
                   self.size_margins_page, self.nup_page, self.workflows_page, self.tools_page,
-                  self.pick_page):
+                  self.pick_page, self.compare_page):
             self.stack.addWidget(p)
         self.stack.setCurrentWidget(self.home_page)
 
@@ -124,6 +114,63 @@ class MainWindow(QMainWindow):
 
         self.status = QStatusBar()
         self.setStatusBar(self.status)
+
+    def paintEvent(self, event):
+        """Fondo con degradado y manchas de color difuminadas (da profundidad a toda la app,
+        ya que las pantallas viven dentro del mismo QStackedWidget sin fondo propio)."""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        base = QLinearGradient(0, 0, w, h)
+        base.setColorAt(0, QColor(BG_GRAD_TOP))
+        base.setColorAt(1, QColor(BG_GRAD_BOTTOM))
+        p.fillRect(self.rect(), QBrush(base))
+        for cx, cy, r, rgba in (
+            (w * 0.06, h * 0.04, max(w, h) * 0.42, ORB1),
+            (w * 0.98, h * 0.14, max(w, h) * 0.46, ORB2),
+            (w * 0.55, h * 1.05, max(w, h) * 0.52, ORB3),
+        ):
+            g = QRadialGradient(cx, cy, r)
+            color = QColor(*rgba)
+            g.setColorAt(0.0, color)
+            transparent = QColor(color)
+            transparent.setAlpha(0)
+            g.setColorAt(1.0, transparent)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QBrush(g))
+            p.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
+        p.end()
+        super().paintEvent(event)
+
+    def restart_app(self):
+        """Relanza el programa (necesario tras cambiar de modo claro/oscuro, porque la paleta
+        se fija al arrancar)."""
+        QApplication.quit()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def toggle_theme(self):
+        new_mode = theme.other_mode(theme.MODE)
+        label = "claro" if new_mode == "light" else "oscuro"
+        resp = QMessageBox.question(
+            self, "Cambiar de modo",
+            f"Se reiniciará la aplicación para aplicar el modo {label}. ¿Continuar?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if resp == QMessageBox.Yes:
+            theme.save_mode(new_mode)
+            self.restart_app()
+
+    def cycle_language(self):
+        new_lang = i18n.next_lang(i18n.LANG)
+        name = i18n.LANG_NAMES.get(new_lang, new_lang)
+        resp = QMessageBox.question(
+            self, "Change language" if i18n.LANG == "en" else "Mudar idioma" if i18n.LANG == "pt" else "Cambiar idioma",
+            f"The app will restart in {name}. Continue?" if i18n.LANG == "en"
+            else f"O aplicativo será reiniciado em {name}. Continuar?" if i18n.LANG == "pt"
+            else f"Se reiniciará la aplicación en {name}. ¿Continuar?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if resp == QMessageBox.Yes:
+            i18n.save_lang(new_lang)
+            self.restart_app()
 
     # ── Utilidades ──────────────────────────────────────────────────────
     def snack(self, msg: str, kind: str = "success"):
@@ -170,13 +217,16 @@ class MainWindow(QMainWindow):
         unknown_msg = ""
         if unknown:
             shown = ", ".join(unknown[:3]) + ("…" if len(unknown) > 3 else "")
-            unknown_msg = (f"No sé abrir: {shown}. Aceptados: PDF, fotos (JPG, PNG, TIFF, BMP, WEBP, GIF), texto, "
-                           "Markdown, HTML y, con LibreOffice, Word/Excel/PowerPoint.")
+            unknown_msg = tr(
+                "No sé abrir: {shown}. Aceptados: PDF, fotos (JPG, PNG, TIFF, BMP, WEBP, GIF), texto, "
+                "Markdown, HTML y, con LibreOffice, Word/Excel/PowerPoint.", shown=shown)
         if not convert:
             if unknown_msg:
                 self.snack(unknown_msg, "error")
             return
-        self.snack(f"Convirtiendo {len(convert)} archivo{'s' if len(convert) != 1 else ''} a PDF…", "info")
+        word_file = tr("archivo")
+        self.snack(tr("Convirtiendo {n} {word_file}{s} a PDF…",
+                       n=len(convert), word_file=word_file, s="s" if len(convert) != 1 else ""), "info")
 
         def work():
             fails = []
@@ -194,7 +244,7 @@ class MainWindow(QMainWindow):
 
     def add_file(self, path: str, name: str):
         if not path or not Path(path).exists():
-            self.snack(f"No se pudo cargar: {name}", "error"); return
+            self.snack(tr("No se pudo cargar: {name}", name=name), "error"); return
         pages = be.safe_page_count(path)
         locked = False
         if pages == 0:
@@ -206,16 +256,16 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pages = 1
             else:
-                self.snack(f"PDF inválido: {name}", "error"); return
+                self.snack(tr("PDF inválido: {name}", name=name), "error"); return
         self.uploaded_files.append({"name": name, "path": path, "pages": pages, "locked": locked})
         self.home_page.refresh_file_list()
         if self._pending:
             self.pick_page.show_for(self._pending[0], self._pending[2])
             self._pending_timer.start(500)
         if locked:
-            self.snack(f"🔒 {name} tiene contraseña: desbloquéalo en Proteger antes de usarlo.", "info")
+            self.snack(tr("🔒 {name} tiene contraseña: desbloquéalo en Proteger antes de usarlo.", name=name), "info")
         else:
-            self.snack(f"✓ {name} ({pages} pág.)")
+            self.snack(tr("✓ {name} ({pages} pág.)", name=name, pages=pages))
 
     def remove_file_obj(self, f: dict):
         if f in self.uploaded_files:
@@ -228,8 +278,8 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         ep = getattr(self, "edit_page", None)
         if not getattr(self, "_force_quit", False) and ep is not None and ep.dirty and ep.doc is not None:
-            r = QMessageBox.question(self, "Cambios sin guardar",
-                                     "Tienes cambios sin guardar en el editor. ¿Guardarlos antes de salir?",
+            r = QMessageBox.question(self, tr("Cambios sin guardar"),
+                                     tr("Tienes cambios sin guardar en el editor. ¿Guardarlos antes de salir?"),
                                      QMessageBox.Save | QMessageBox.Discard | QMessageBox.Cancel, QMessageBox.Save)
             if r == QMessageBox.Cancel:
                 e.ignore()
@@ -249,9 +299,11 @@ class MainWindow(QMainWindow):
         if not d.get("restart"):
             when = time.strftime("%d/%m/%Y %H:%M", time.localtime(d.get("time", 0)))
             r = QMessageBox.question(
-                self, "Recuperar trabajo anterior",
-                f"La aplicación se cerró sin guardar «{d.get('name', 'documento.pdf')}» (borrador del {when}).\n"
-                "¿Quieres continuar con el trabajo anterior?", QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                self, tr("Recuperar trabajo anterior"),
+                tr("La aplicación se cerró sin guardar «{name}» (borrador del {when}).\n"
+                   "¿Quieres continuar con el trabajo anterior?",
+                   name=d.get('name', 'documento.pdf'), when=when),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
             if r != QMessageBox.Yes:
                 dr.clear()
                 return
@@ -260,7 +312,7 @@ class MainWindow(QMainWindow):
         try:
             shutil.copy(d["path"], dest)
         except Exception:
-            self.snack("No se pudo recuperar el borrador.", "error")
+            self.snack(tr("No se pudo recuperar el borrador."), "error")
             return
         self.uploaded_files.clear()
         self.add_file(str(dest), name)
@@ -272,7 +324,7 @@ class MainWindow(QMainWindow):
                 ep._write_draft()
             else:
                 dr.clear()
-            self.snack("Documento reabierto" + (" con tus cambios sin guardar." if ep.dirty else "."), "success")
+            self.snack(tr("Documento reabierto") + (tr(" con tus cambios sin guardar.") if ep.dirty else "."), "success")
 
     def open_in_viewer(self, f: dict):
         QDesktopServices.openUrl(QUrl.fromLocalFile(f["path"]))
@@ -302,8 +354,8 @@ class MainWindow(QMainWindow):
         self.uploaded_files = [{"name": Path(out_path).name, "path": out_path, "pages": pages}]
         self.home_page.refresh_file_list()
         self.go_home()
-        self.snack(f"✓ {Path(out_path).name} — guardado en Descargas. "
-                    "Puedes guardarlo como o seguir con otra herramienta.")
+        self.snack(tr("✓ {name} — guardado en Descargas. "
+                      "Puedes guardarlo como o seguir con otra herramienta.", name=Path(out_path).name))
 
     def replace_file(self, old_f: dict, new_path: str):
         """Sustituye un archivo concreto (p.ej. tras Edit/Metadata) por su
@@ -319,15 +371,15 @@ class MainWindow(QMainWindow):
 
     def do_save_as_copy(self):
         if not self.uploaded_files:
-            self.snack("Añade al menos un PDF", "error"); return
+            self.snack(tr("Añade al menos un PDF"), "error"); return
         src = self.uploaded_files[0]["path"]
         dest, _ = QFileDialog.getSaveFileName(
-            self, "Guardar como", self.uploaded_files[0]["name"], "PDF (*.pdf)")
+            self, tr("Guardar como"), self.uploaded_files[0]["name"], "PDF (*.pdf)")
         if not dest:
             return
         import shutil
         shutil.copy2(src, dest)
-        self.snack(f"✓ Guardado: {Path(dest).name}")
+        self.snack(tr("✓ Guardado: {name}", name=Path(dest).name))
 
     def after_save(self, out_path: str):
         """Tras Merge/Organize: el resultado pasa a ser el archivo cargado."""
@@ -353,26 +405,26 @@ class MainWindow(QMainWindow):
             self._open_ajuste_for_file(self.uploaded_files[0], single=True)
             return
 
+        opt_all = tr("Todos los archivos juntos (navegar como en un merge)")
         choice, ok = QInputDialog.getItem(
-            self, "Ajuste de imagen", "¿Qué quieres ajustar?",
-            ["Todos los archivos juntos (navegar como en un merge)",
-             "Solo un archivo suelto"],
+            self, tr("Ajuste de imagen"), tr("¿Qué quieres ajustar?"),
+            [opt_all, tr("Solo un archivo suelto")],
             0, False)
         if not ok:
             return
 
-        if choice.startswith("Todos"):
+        if choice == opt_all:
             dlg = AjusteMultiDialog(self.uploaded_files, self)
             if dlg.exec() == QDialog.Accepted and dlg.results:
                 for fi, out in dlg.results.items():
-                    self.snack(f"✓ Ajuste: {Path(out).name}")
+                    self.snack(tr("✓ Ajuste: {name}", name=Path(out).name))
                     self.replace_file(self.uploaded_files[fi], out)
                 if dlg.applied_params:
                     self.record_step("adjust", dlg.applied_params)
         else:
             names = [f["name"] for f in self.uploaded_files]
             name, ok2 = QInputDialog.getItem(
-                self, "Elegir archivo", "¿Qué PDF quieres ajustar?", names, 0, False)
+                self, tr("Elegir archivo"), tr("¿Qué PDF quieres ajustar?"), names, 0, False)
             if not ok2:
                 return
             f = next((f for f in self.uploaded_files if f["name"] == name), None)
@@ -382,7 +434,7 @@ class MainWindow(QMainWindow):
     def _open_ajuste_for_file(self, f: dict, single: bool):
         dlg = AjusteDialog(f["path"], self)
         if dlg.exec() == QDialog.Accepted and dlg.result_path:
-            self.snack(f"✓ Ajuste: {Path(dlg.result_path).name}")
+            self.snack(tr("✓ Ajuste: {name}", name=Path(dlg.result_path).name))
             if dlg.applied_params:
                 self.record_step("adjust", dlg.applied_params)
             if single:
@@ -398,9 +450,6 @@ class MainWindow(QMainWindow):
                 return f
         return None
 
-    def open_tools_view(self):
-        self.open_tool("Comprimir")
-
     def open_tool(self, name: str):
         """Abre una herramienta de archivo (Comprimir, Proteger, Marca de agua, Aplanar y reparar, Convertir a PDF u
         OCR). Salvo Convertir, necesita un PDF: si no hay, lo pide primero y la abre sola al subirlo."""
@@ -414,18 +463,24 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         self.organize_page.populate()
         self.stack.setCurrentWidget(self.organize_page)
+
+    def open_compare_view(self):
+        if not self.ensure_files("Comparar PDFs", self.open_compare_view, 1):
+            return
+        self.compare_page.populate()
+        self.stack.setCurrentWidget(self.compare_page)
 
     def open_edit_view(self):
         if not self.ensure_files("Editor", self.open_edit_view, 1):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         if not be.HAS_FITZ:
-            self.snack("PyMuPDF (fitz) no está instalado", "error"); return
+            self.snack(tr("PyMuPDF (fitz) no está instalado"), "error"); return
         self.edit_page.populate()
         self.stack.setCurrentWidget(self.edit_page)
 
@@ -434,9 +489,9 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         if not be.HAS_FITZ:
-            self.snack("PyMuPDF (fitz) no está instalado", "error"); return
+            self.snack(tr("PyMuPDF (fitz) no está instalado"), "error"); return
         self.metadata_page.populate()
         self.stack.setCurrentWidget(self.metadata_page)
 
@@ -445,7 +500,7 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         self.split_page.populate()
         self.stack.setCurrentWidget(self.split_page)
 
@@ -454,9 +509,9 @@ class MainWindow(QMainWindow):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         if not be.HAS_FITZ:
-            self.snack("PyMuPDF (fitz) no está instalado", "error"); return
+            self.snack(tr("PyMuPDF (fitz) no está instalado"), "error"); return
         self.size_margins_page.populate()
         self.size_margins_page.refresh_preview()
         self.stack.setCurrentWidget(self.size_margins_page)
@@ -468,7 +523,7 @@ class MainWindow(QMainWindow):
 
     def save_session_as_workflow(self):
         if not self.session_steps:
-            self.snack("Aún no has aplicado ninguna herramienta", "error"); return
+            self.snack(tr("Aún no has aplicado ninguna herramienta"), "error"); return
         workflows = wf.load_workflows()
         dup = wf.find_duplicate(self.session_steps, workflows)
         if dup:
@@ -477,8 +532,8 @@ class MainWindow(QMainWindow):
             self.saved_id = dup["id"]
             self.steps_changed.emit()
             QMessageBox.information(
-                self, "Ya está guardado",
-                f"Ya tienes el workflow «{dup['name']}» con exactamente estos pasos.")
+                self, tr("Ya está guardado"),
+                tr("Ya tienes el workflow «{name}» con exactamente estos pasos.", name=dup['name']))
             return
         dlg = WorkflowEditorDialog(self.session_steps, parent=self)
         if dlg.exec() != QDialog.Accepted:
@@ -490,9 +545,9 @@ class MainWindow(QMainWindow):
             self.saved_name = dlg.name
             self.saved_id = new_wf["id"]
             self.steps_changed.emit()
-            self.snack(f"✓ Workflow «{dlg.name}» guardado — lo tienes en Workflows")
+            self.snack(tr("✓ Workflow «{name}» guardado — lo tienes en Workflows", name=dlg.name))
         else:
-            self.snack("No se pudo guardar el workflow", "error")
+            self.snack(tr("No se pudo guardar el workflow"), "error")
 
     def append_session_to_saved(self):
         """Añade al workflow ya guardado solo los pasos aplicados después."""
@@ -500,14 +555,14 @@ class MainWindow(QMainWindow):
         target = next((w for w in workflows if w["id"] == self.saved_id), None)
         new_steps = self.session_steps[self.saved_upto:]
         if target is None:
-            self.snack("Ese workflow ya no existe: guárdalo como nuevo", "error")
+            self.snack(tr("Ese workflow ya no existe: guárdalo como nuevo"), "error")
             self.saved_id = ""
             self.steps_changed.emit()
             return
         if not new_steps:
             return
         dlg = WorkflowEditorDialog(new_steps, target["name"], self,
-                                   title=f"Añadir pasos a «{target['name']}»")
+                                   title=tr("Añadir pasos a «{name}»", name=target['name']))
         if dlg.exec() != QDialog.Accepted:
             return
         target["steps"].extend(dlg.steps)
@@ -516,15 +571,15 @@ class MainWindow(QMainWindow):
             self.saved_upto = len(self.session_steps)
             self.saved_name = target["name"]
             self.steps_changed.emit()
-            self.snack(f"✓ {len(dlg.steps)} paso(s) añadidos a «{target['name']}»")
+            self.snack(tr("✓ {n} paso(s) añadidos a «{name}»", n=len(dlg.steps), name=target['name']))
         else:
-            self.snack("No se pudo guardar el workflow", "error")
+            self.snack(tr("No se pudo guardar el workflow"), "error")
 
     def run_workflow(self, w: dict):
         files = [f["path"] for f in self.uploaded_files]
         if not files:
             files, _ = QFileDialog.getOpenFileNames(
-                self, f"Archivos para «{w['name']}»", "", "PDF (*.pdf)")
+                self, tr("Archivos para «{name}»", name=w['name']), "", "PDF (*.pdf)")
             if not files:
                 return
         fields = wf.prompt_fields(w["steps"])
@@ -534,7 +589,7 @@ class MainWindow(QMainWindow):
             if dlg.exec() != QDialog.Accepted:
                 return
             values = dlg.values
-        prog = QProgressDialog(f"Ejecutando «{w['name']}»…", None, 0, 0, self)
+        prog = QProgressDialog(tr("Ejecutando «{name}»…", name=w['name']), None, 0, 0, self)
         prog.setWindowTitle("Workflow")
         prog.setWindowModality(Qt.WindowModal)
         prog.setMinimumDuration(0)
@@ -548,9 +603,9 @@ class MainWindow(QMainWindow):
                 outs, warns = wf.run_workflow(
                     steps, files, values,
                     progress=lambda i, n, label: self.workflow_progress.emit(
-                        f"Paso {min(i + 1, n)} de {n}: {label}"))
+                        tr("Paso {i} de {n}: {label}", i=min(i + 1, n), n=n, label=label)))
             except Exception as e:
-                outs, warns = [], [f"Error inesperado: {e}"]
+                outs, warns = [], [tr("Error inesperado: {e}", e=e)]
             self.workflow_done.emit(outs, warns)
 
         run_bg(_job)
@@ -568,20 +623,20 @@ class MainWindow(QMainWindow):
                 {"name": Path(o).name, "path": o, "pages": be.safe_page_count(o)} for o in outs]
             self.home_page.refresh_file_list()
             self.go_home()
-            self.snack(f"✓ Workflow terminado: {len(outs)} archivo(s) en Descargas")
+            self.snack(tr("✓ Workflow terminado: {n} archivo(s) en Descargas", n=len(outs)))
         else:
-            self.snack("El workflow no generó ningún archivo", "error")
+            self.snack(tr("El workflow no generó ningún archivo"), "error")
         if warns:
-            QMessageBox.information(self, "Avisos del workflow", "\n".join(f"• {w}" for w in warns))
+            QMessageBox.information(self, tr("Avisos del workflow"), "\n".join(f"• {w}" for w in warns))
 
     def open_nup_view(self):
         if not self.ensure_files("Varias por hoja", self.open_nup_view, 1):
             return
         lf = self._locked_file()
         if lf:
-            self.snack(f"«{lf['name']}» tiene contraseña: desbloquéalo en Proteger.", "error"); return
+            self.snack(tr("«{name}» tiene contraseña: desbloquéalo en Proteger.", name=lf['name']), "error"); return
         if not be.HAS_FITZ:
-            self.snack("PyMuPDF (fitz) no está instalado", "error"); return
+            self.snack(tr("PyMuPDF (fitz) no está instalado"), "error"); return
         self.nup_page.populate()
         self.nup_page.refresh_preview()
         self.stack.setCurrentWidget(self.nup_page)
@@ -600,14 +655,16 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyleSheet(QSS)
-    try:                                         # menús y botones estándar de Qt en español (Cortar, Copiar, Pegar…)
-        from PySide6.QtCore import QTranslator, QLibraryInfo
-        _tr = QTranslator()
-        if _tr.load("qtbase_es", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
-            app.installTranslator(_tr)
-            app._qt_translator = _tr
-    except Exception:
-        pass
+    if i18n.LANG != "en":                         # menús y botones estándar de Qt (Cortar, Copiar, Pegar…) en el idioma elegido
+        try:
+            from PySide6.QtCore import QTranslator, QLibraryInfo
+            _tr = QTranslator()
+            qt_lang = {"es": "qtbase_es", "pt": "qtbase_pt"}.get(i18n.LANG)
+            if qt_lang and _tr.load(qt_lang, QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)):
+                app.installTranslator(_tr)
+                app._qt_translator = _tr
+        except Exception:
+            pass
     icon_path = be.resource_path("provecto_icon.ico")
     if Path(icon_path).is_file():
         app.setWindowIcon(QIcon(icon_path))

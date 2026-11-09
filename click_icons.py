@@ -3,7 +3,6 @@
 Se dibujan con Qt en un lienzo cuadrado con margen, de modo que se pueden girar sin cortarse."""
 import math
 import os
-import shutil
 import time
 from pathlib import Path
 

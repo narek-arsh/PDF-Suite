@@ -1,66 +1,60 @@
 # -*- mode: python ; coding: utf-8 -*-
-# PDF Manager – Travel Agent Edition
-# Ejecutar con:  pyinstaller PDF.spec
+# PDF Manager by Provecto
+# Ejecutar con:  pyinstaller PDF.spec --noconfirm
 
-import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
-block_cipher = None
-
-# ── Archivos extra que el exe necesita en tiempo de ejecución ────────────────
-added_files = [
-    # Fuente Myriad Pro  (origen, destino dentro del bundle)
-    (str(Path("Font") / "MYRIADPRO-REGULAR.OTF"), "Font"),
-    # Icono de la ventana
-    ("icono.ico", "."),
+datas = [
+    ("tessdata", "tessdata"),                 # idiomas de OCR (pdf_tools.tessdata_dirs busca en _MEIPASS/tessdata)
+    ("provecto_icon.ico", "."),
+    ("provecto_logo.svg", "."),
+    ("click_icons.svg", "."),
+    ("LICENSE", "."),                         # AGPL-3.0: se distribuye junto al programa
+    ("THIRD_PARTY_NOTICES.md", "."),
 ]
+binaries = []
+hiddenimports = [
+    "i18n", "theme", "backend", "pdf_tools", "layout_tools", "numfix", "photo_fix",
+    "workflows", "draft", "click_icons", "stamp_tool", "signature_pad", "form_tools",
+    "fontmanager", "winfonts", "annot_tools", "icons", "flow_layout",
+    "ui.home", "ui.tools", "ui.edit_page", "ui.editor_view", "ui.editor_parts", "ui.ocr",
+    "ui.organize", "ui.split", "ui.metadata", "ui.size_nup", "ui.compare", "ui.pick",
+    "ui.ajuste", "ui.workflows_ui", "ui.widgets", "ui.common",
+]
+
+# Paquetes con datos/modelos/imports dinámicos: se recogen enteros (si falta alguno, se avisa y se sigue).
+for pkg in ("rapidocr", "onnxruntime", "pdf2docx", "pyhanko", "pyhanko_certvalidator",
+            "fitz", "pymupdf", "docx", "openpyxl", "fontTools", "certifi"):
+    try:
+        d, b, h = collect_all(pkg)
+        datas += d
+        binaries += b
+        hiddenimports += h
+    except Exception as e:
+        print(f"[spec] aviso: no se pudo recoger {pkg}: {e}")
 
 a = Analysis(
     ["PDF.py"],
     pathex=["."],
-    binaries=[],
-    datas=added_files,
-    hiddenimports=[
-        # Drag & Drop
-        "tkinterdnd2",
-        # Flet internals
-        "flet",
-        "flet.fastapi",
-        "flet_core",
-        "flet_runtime",
-        # PDF libs
-        "pypdf",
-        "pypdf._reader",
-        "pypdf._writer",
-        "fitz",
-        "pdfplumber",
-        "pdfminer",
-        "pdfminer.high_level",
-        "pdfminer.layout",
-        # Otros
-        "requests",
-        "urllib3",
-        "charset_normalizer",
-        "certifi",
-        "PIL",
-        "PIL.Image",
-    ],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        "matplotlib",
-        "numpy",
-        "pandas",
-        "scipy",
+        "tkinter", "matplotlib", "pandas", "scipy", "IPython", "pytest", "flet",
+        "PySide6.QtWebEngineCore", "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineQuick",
+        "PySide6.QtPdf", "PySide6.QtPdfWidgets", "PySide6.QtQml", "PySide6.QtQuick",
+        "PySide6.QtQuickWidgets", "PySide6.Qt3DCore", "PySide6.QtMultimedia",
+        "PySide6.QtMultimediaWidgets", "PySide6.QtCharts", "PySide6.QtDataVisualization",
+        "PySide6.QtBluetooth", "PySide6.QtSensors", "PySide6.QtNetworkAuth",
     ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -71,23 +65,17 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    console=False,          # ← sin ventana de terminal
+    upx=False,                # UPX rompe DLLs de Qt y dispara antivirus
+    console=False,            # sin ventana de terminal
     disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon="icono.ico",       # ← icono de la app
+    icon="provecto_icon.ico",
 )
 
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="PDFManager",      # carpeta en dist/
+    upx=False,
+    name="PDFManager",        # carpeta dist/PDFManager/
 )
